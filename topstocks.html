@@ -1,1200 +1,653 @@
-// To run this:
-// node --max-http-header-size=32768 "historicaltrends.js"
-
-const cheerio = require('cheerio');
-const fs = require('fs').promises; // Using promises version of fs for async operations
-const { readCsv, writeCsv, readTxt, writeTxt, readJson, writeJson, fileExists, delay, FormatDate, FormatDateTime, FormatNumber, cleanQuotes, isNumeric, isDateOrTime, isEmpty, percentile } = require('../lib/utils.js');
-const { readURL } = require('../lib/internet.js');
-const { getCompanyInfo, getTopMovers, getHistoricalData } = require('../lib/stocks.js');
 
 
-const NumDates = 159; 
-const ConfigFile = './stocks.json';
+<!DOCTYPE html>
+<head><meta http-equiv='Content-Type' content='text/html; charset=UTF-8'>
 
-let configData = { 
-        RunCount : 0, // Default value
-        NumDaysForTrend: 365.25,
-        NumDaysForRecentTrend: 90,
-        GrowthMaxPercentile: 0.9,
-        GrowthMinPercentile: 0.0,
-        DropWindowInDays: 730.5,
-        DropPercentile: 0.1,
-        UpdateEveryNDay: 14, // Update every 7 days
-        UpdateTopNStocks: 35, // Update every 7 days
-        UpdateMustAfterDays: 21, // Definitely update after this
-        NumTriesBeforeError: 3, // Number of tries before giving up
-        WaitMinAfterError: 20,
-        database: "./stocks.tsv",
-    };
-// --- Main Execution ---
-(async () => {
-    const RETRYEVERYNTHSECOND =  1;
-
-    // Process command line arguments
-    const args = process.argv;
-    whatToUpdate = {
-        Update: true,
-        UpdateNew: true,
-        UpdateOld: true,
-        UpdateTopRank:true,
-        UpdateAll: false,
-        Email: true,
-        Webpage: true,
-    };
-
-    if (args.length > 2) {
-        for(let i=2; i<args.length; i++) {
-            if (args[i].toLowerCase()=='updateonly') {
-                whatToUpdate.Update=true;
-                whatToUpdate.Email=false;
-                whatToUpdate.Webpage=false;
-            } else if (args[i].toLowerCase()=='updateoldonly') {
-                whatToUpdate.Update = true;
-                whatToUpdate.UpdateNew=false;
-                whatToUpdate.UpdateOld=true;
-                whatToUpdate.UpdateTopRank=false;
-                whatToUpdate.UpdateAll=false;
-            } else if (args[i].toLowerCase()=='updatenewonly') {
-                whatToUpdate.Update = true;
-                whatToUpdate.UpdateNew=true;
-                whatToUpdate.UpdateOld=false;
-                whatToUpdate.UpdateTopRank=false;
-                whatToUpdate.UpdateAll=false;
-            } else if (args[i].toLowerCase()=='updatetoponly') {
-                whatToUpdate.Update = true;
-                whatToUpdate.UpdateNew=false;
-                whatToUpdate.UpdateOld=false;
-                whatToUpdate.UpdateTopRank=true;
-                whatToUpdate.UpdateAll=false;
-            } else if (args[i].toLowerCase()=='updateall') {
-                whatToUpdate.Update = true;
-                whatToUpdate.UpdateNew=true;
-                whatToUpdate.UpdateOld=true;
-                whatToUpdate.UpdateTopRank=true;
-                whatToUpdate.UpdateAll=true;
-            } else if (args[i].toLowerCase()=='emailonly') {
-                whatToUpdate.Update=false;
-                whatToUpdate.Email=true;
-                whatToUpdate.Webpage=false;
-            } else if (args[i].toLowerCase()=='webpageonly') {
-                whatToUpdate.Update=false;
-                whatToUpdate.Email=false;
-                whatToUpdate.Webpage=true;
-            } else if (args[i].toLowerCase()=='noupdate') {
-                whatToUpdate.Update=false;
-            } else if (args[i].toLowerCase()=='noemail') {
-                whatToUpdate.Email=false;
-            } else if (args[i].toLowerCase()=='nowebpage') {
-                whatToUpdate.Webpage=false;
-            }
-        }
-    }
-    
-    if (false) {
-        response = await findNewStockSymbols();
-        //response = await stocks.getTopMovers();
-        console.dir(response);
-        return;
-    }
-    if (false) {
-        const extractedData = await getHistoricalData("AAPL");
-        //const extractedData = await getCompanyInfo("AAPL");
-        if (extractedData === null) {
-            console.error("getHistoricalData returned NULL");
-            return;
-        }
-        if (extractedData.length > 0) {
-            //await saveData(extractedData, 'json'); // Change to 'csv' or implement database saving
-            console.log(JSON.stringify(extractedData, null, 2)); // Optionally log to console
-        } else {
-            console.log("No data extracted.");
-        }
-        return; // Exit after testing
-    }
-
-    console.log(`Starting stock historical trend analysis: ${FormatDateTime(new Date())}`);
-
-    // Read current count from config file
-    if (await fileExists(ConfigFile)) {
-        const configDataFromFile = await readJson(ConfigFile);
-        if (configDataFromFile) {
-            configData = { ...configData, ...configDataFromFile };
-        }
-    }
-    configData.RunCount ++;
-    await writeJson(ConfigFile, configData);
-
-    // Read data
-//    extractedData = await loadData(configData.database);
-    extractedData = await readCsv(configData.database, delimiter='\t', convertdatetime=true);
-    if (extractedData === null) {
-        console.error(`Cannot read ${configData.database}`);
-        return;
-    }
-    if (false) {
-        let label1 = 'Score_1';
-        extractedData = [...extractedData].sort((a, b) => // if a>b, then -'ve, if b>a, then +'ve
-                (b['Invalid']!==undefined && b['Invalid']!==null && b['Invalid']!=='' ? -1 : 
-                (a['Invalid']!==undefined && a['Invalid']!==null && a['Invalid']!=='' ? +1 : 
-                (b[label1]===undefined || b[label1]===null || b[label1]==='' || Number.isNaN(b[label1]) || b[label1]=='NaN' ? -1 :
-                (a[label1]===undefined || a[label1]===null || a[label1]==='' || Number.isNaN(a[label1]) || a[label1]=='NaN' ? +1 :  
-                    b[label1] - a[label1]
-                ))))); // Descending order
-        console.log(`${extractedData[extractedData.length-1-0]['Rank_1']}: ${extractedData[extractedData.length-1-0]['Score_1']}`);
-        console.log(`${extractedData[extractedData.length-1-1]['Rank_1']}: ${extractedData[extractedData.length-1-1]['Score_1']}`);
-        console.log(`${extractedData[extractedData.length-1-2]['Rank_1']}: ${extractedData[extractedData.length-1-2]['Score_1']}`);
-        console.log(`${extractedData[extractedData.length-1-3]['Rank_1']}: ${extractedData[extractedData.length-1-3]['Score_1']}`);
-        return;
-    }
-    if (false) {
-        //console.dir(extractedData[0]); // `Responses: ${extractedData.substring(0, 200)}`); // Log the first 200 characters for debugging
-        //console.log(extractedData.length + " rows extracted.");
-        NumRowsToProcess = 0;        
-        extractedData.forEach((row, index) => {
-            if (updateRowOrNot(index, row['Symbol'],row['Rank'], row['Update timestamp'], whatToUpdate, configData )) {
-                NumRowsToProcess++;
-            }
-        });
-        console.log(`Processing ${NumRowsToProcess} rows out of ${extractedData.length} total rows.`);
-    }
-    if (whatToUpdate.Update) {
-        extractedData = [...extractedData].sort((a, b) => // if a>b, then -'ve, if b>a, then +'ve
-            (b['Invalid']!==undefined && b['Invalid']!==null && b['Invalid']!=='' ? -1 : 
-            (a['Invalid']!==undefined && a['Invalid']!==null && a['Invalid']!=='' ? +1 : (a['Symbol'].toLowerCase() < b['Symbol'].toLowerCase() ? -1:1)))
-            ); // Sort alphabetically
- 
-        StockEndDate = new Date()
-        StockStartDate = StockEndDate - (NumDates*7-1) * (24*60*60*1000);
-        StockInterval = "1wk"; // 1d: Daily dat, 1wk: Weekly data
-    
-        // See if there are new symbols
-        let NewSymbols = await findNewStockSymbols();
-        let NumSymbolsAdded = 0;
-        for(let i=0; i<NewSymbols.length; i++) {
-            if (extractedData.some(row => row['Symbol']=== NewSymbols[i].trim())==false) {  // doesn't exist yet
-                extractedData.push({ Symbol: NewSymbols[i].trim() });
-                NumSymbolsAdded ++;
-            }
-        }
-        console.log(`${NumSymbolsAdded} symbols added to list.`);
-        //response = await getTopMovers();
-        
-        if (whatToUpdate.UpdateAll) {
-            console.log('Update all stocks');
-        } else {
-            whattoupdatestr = [];
-            if (whatToUpdate.UpdateTopRank) whattoupdatestr.push('top entries');
-            if (whatToUpdate.UpdateNew) whattoupdatestr.push('new entries');
-            if (whatToUpdate.UpdateOld) whattoupdatestr.push('old entries');
-            if (!whatToUpdate.UpdateAll) whattoupdatestr.push('some entries');
-            console.log(`Update ${whattoupdatestr.join(', ')}`);
-        }
-
-        for(index=0; index<extractedData.length; index++) {
-            row = extractedData[index];
-            if (updateRowOrNot(index, row['Symbol'],row['Rank'], row['Update timestamp'], whatToUpdate, configData)) {
-                process.stdout.write(`\r                                                                           `); // Clear the line
-                process.stdout.write(`\rStock ${index}/${extractedData.length}: ${row['Symbol']}`);
-                stockData = null;
-                for (TryNum = 0; TryNum <= configData.NumTriesBeforeError; TryNum++) { // Retry up to 3 times
-                    response = await getHistoricalData(row['Symbol'], StockStartDate, StockEndDate, StockInterval);
-                    if (response.status == 'success') {
-                        stockData = response.stockData;
-                        break;
-                    }
-                    if (response.status == 'not found' ) {
-                        process.stdout.write(' <- Invalid symbol\n');                
-                        break; // Exit retry loop if data is successfully extracted
-                    }
-                    if (TryNum == configData.NumTriesBeforeError-1) { // Tried enough, so wait
-                        for (let i = 0; i < configData.WaitMinAfterError*60/RETRYEVERYNTHSECOND; i++) {
-                            NumMin = Math.floor(configData.WaitMinAfterError - i*RETRYEVERYNTHSECOND / 60);
-                            NumSec = Math.floor((60 - i*RETRYEVERYNTHSECOND + 6000) % 60);
-                            process.stdout.write(`\rStock ${index}/${extractedData.length}: ${row['Symbol']} retrying in ${NumMin} min ${NumSec.toString().padStart(2, '0')} sec...   `);
-                            await delay(RETRYEVERYNTHSECOND*1000); // wait 10 sec
-                        }
-                        console.log('');
-                        //process.stdout.write('\r');
-                    } else if (TryNum == configData.NumTriesBeforeError) break; // Tried enough, so give up
-                }
-                
-                //console.log(`Original ${row['Update timestamp']} -> \$${row['Last price']} (${row['Last change']})`); // Log the original update timestamp}`);
-                row['Update timestamp'] = new Date(); // Current time
-                if (stockData === null) {
-                    if (row['Invalid']===undefined || row['Invalid']===null || row['Invalid']=='' || row['Invalid']==0) {
-                        row['Invalid']=1;    
-                    } else if (isNumeric(row['Invalid'])) {
-                        row['Invalid'] = Number(row['Invalid'])+1;
-                        if (row['Invalid'] == 3) row['Invalid']='dead'; // 3 times invalid, then remove it
-                    } else {
-                       row['Invalid'] = 2;
-                    }
-                    row['Score']=0;
-                    for (let i = 0; i < NumDates; i++) {
-                        row[`Date ${(i+1)}`]='';
-                        row[`Close ${(i+1)}`]='';
-                    }
-                } else {
-                    process.stdout.write(`  ${stockData.length} entries`);
-                    dates=[];
-                    prices=[];
-                    for (let i = 0; i < stockData.length; i++) {
-                        dates[i] = new Date(stockData[i]['Date']);
-                        prices[i] = new Number(stockData[i]['AdjClose']);
-                    }
-                    RowResults = CalculateRowScore(dates,prices,configData,stockData[i]['Symbol']);
-
-                    row['Invalid']='';
-                    row['Score']=RowResults.AllScores[0]; // Score;
-                    for(let i=1; i<RowResults.AllScores.length; i++) {
-                        row[`Score_${i}`]=RowResults.AllScores[i]; // PriorScore;
-                    }
-                    for(let i=0; i<RowResults.AllRobustChange.length; i++) {
-                        row[`RobustChange_${i}`]=RowResults.AllRobustChange[i];
-                    }
-                    for(let i=0; i<RowResults.AllWorstDrop.length; i++) {
-                        row[`AllWorstDrop_${i}`]=RowResults.AllWorstDrop[i];
-                    }
-                                        
-                    for (let i = 0; i < NumDates; i++) {
-                        if (i<dates.length) {
-                            row[`Date ${(i+1)}`]=dates[i];
-                            row[`Close ${(i+1)}`]=prices[i];
-                            
-                        } else {
-                            row[`Date ${(i+1)}`]='';
-                            row[`Close ${(i+1)}`]='';
-                        }
-                    }
-
-                    // Get company information
-                    //if (row['Symbol']=='VRNA') console.log("I'm here -> ");
-                    companyData = await getCompanyInfo(row['Symbol']);
-                    if (companyData.status == 'success') {
-                        if (!isEmpty(companyData.name)) row['Name'] = companyData.name;
-                        if (!isEmpty(companyData.description)) row['Company profile'] = companyData.description;
-                        if (!isEmpty(companyData.marketCap)) row['Market cap'] = companyData.marketCap;
-                        if (!isEmpty(companyData.peRatio)) row['P/E ratio'] = companyData.peRatio;
-                        if (!isEmpty(companyData.website)) row['Website'] = companyData.website;
-                        if (!isEmpty(companyData.industry)) row['Hierarchy - industry'] = companyData.industry;
-                        if (!isEmpty(companyData.sector)) row['Hierarchy - sector'] = companyData.sector;
-                        if (!isEmpty(companyData.currentPrice)) row['Last price'] = companyData.currentPrice;
-                        if (!isEmpty(companyData.currentPriceChange)) row['Last change'] = companyData.currentPriceChange;
-                    }
-                }
-                //console.log(`Updated  ${row['Update timestamp']} -> \$${row['Last price']} (${row['Last change']})`); // Log the original update timestamp}`);
-                extractedData[index] = row; // Update the row     
-                
-            }
-            //console.log(`Finished stock historical trend analysis: ${FormatDateTime(new Date())}`);
-        }
-        console.log('');
-
-        // filter out dead stocks
-        extractedData = extractedData.filter(row => row['Invalid']!=='dead');
-
-        //saveData("./stocks_beforeSort.tsv", extractedData);
-    
-        // Sort to get ranks
-        for(let i=12-1; i>=0; i--) {
-            let label1 = (i>0 ? `Score_${i}` : 'Score');
-            extractedData = [...extractedData].sort((a, b) => // if a>b, then -'ve, if b>a, then +'ve
-                (b['Invalid']!==undefined && b['Invalid']!==null && b['Invalid']!=='' ? -1 : 
-                (a['Invalid']!==undefined && a['Invalid']!==null && a['Invalid']!=='' ? +1 : 
-                (b[label1]===undefined || b[label1]===null || b[label1]==='' || Number.isNaN(b[label1]) || b[label1]=='NaN'  ? -1 :
-                (a[label1]===undefined || a[label1]===null || a[label1]==='' || Number.isNaN(a[label1]) || a[label1]=='NaN'  ? +1 :  
-                    b[label1] - a[label1]
-                ))))); // Descending order
-            CurrentRank = 1;
-            let label2 = (i>0 ? `Rank_${i}` : 'Rank');
-            for(let index=0; index<extractedData.length; index++) {
-                if (extractedData[index]['Invalid']===undefined || extractedData[index]['Invalid']===null || extractedData[index]['Invalid']=='') {
-                    extractedData[index][label2] = CurrentRank; // New rank
-                    CurrentRank++;
-                }
-            }
-            //for(let index=0; index<10; index++) {
-            //    console.log(`${index+1}: ${extractedData[index]['Symbol']}  ${label1}: ${extractedData[index][label1]} (${Number.isNaN(extractedData[index][label1])}, ${extractedData[index][label1]=='NaN'}), ${label2} ${extractedData[index][label2]}...  ${extractedData[index]['Rank']}  ${extractedData[index]['Rank_1']}  ${extractedData[index]['Rank_2']}  ${extractedData[index]['Rank_3']}  ${extractedData[index]['Rank_4']}`);
-            //}
-            //console.log('-----------');
-        }
-
-        //await saveData(configData.database, extractedData);
-        await writeCsv(configData.database, extractedData, delimiter='\t', convertdatetime=true);
-    }
-   
-    if (whatToUpdate.Email) {
-        await createEmail(extractedData, NumDates, configData);
-    }
-    if (whatToUpdate.Webpage) {
-        await createWebPage(extractedData, NumDates, configData);
-    }
-    console.log(`Finished stock historical trend analysis: ${FormatDateTime(new Date())}`);
-})();
-
-// --- Save Data Function ---
-/*
-async function saveData(filename, data) {
-    data.forEach((row, index) => {
-        const keys = Object.keys(row);
-        const values = Object.values(row);
-        for(let i=0; i<keys.length; i++) {
-            const tmpkeyvalue = keys[i].trim().toLowerCase();
-            if (tmpkeyvalue === 'time' ||
-                tmpkeyvalue.includes(' time ') ||
-                tmpkeyvalue.startsWith('time ') || 
-                tmpkeyvalue.endsWith(' time'))
-            {     
-                if (values[i] instanceof Date) { 
-                    data[index][keys[i]] = FormatDateTime(values[i]); //.toString(); 
-                }
-            } else if (tmpkeyvalue === 'date' ||
-                tmpkeyvalue.includes(' date ') ||
-                tmpkeyvalue.startsWith('date ') || 
-                tmpkeyvalue.endsWith(' date') )
-            {
-                if (values[i] instanceof Date) { 
-                    data[index][keys[i]] = FormatDate(values[i],"MM/DD/YYYY"); //.toString(); 
-                }
-            }
-        }
-    });
-    writeCsv(filename, data,  delimiter='\t');
+<title>Top stocks</title>
+<style>
+* {
+  font-family: Arial, sans-serif;
 }
-
-async function loadData(filename) {
-    data = await readCsv(filename, delimiter='\t');
-    data.forEach((row, index) => {
-        const keys = Object.keys(row);
-        const values = Object.values(row);
-        for(let i=0; i<keys.length; i++) {
-            const tmpkeyvalue = keys[i].trim().toLowerCase();
-            if (tmpkeyvalue === 'time' ||
-                tmpkeyvalue.includes(' time ') ||
-                tmpkeyvalue.startsWith('time ') || 
-                tmpkeyvalue.endsWith(' time') || 
-                tmpkeyvalue === 'date' ||
-                tmpkeyvalue.includes(' date ') ||
-                tmpkeyvalue.startsWith('date ') || 
-                tmpkeyvalue.endsWith(' date') )
-            {
-                try {
-                    const convertedvalue = new Date(values[i]);
-                    data[index][keys[i]] = isNaN(convertedvalue) ? null : convertedvalue;
-                } catch {}
-            } else if (typeof values[i] === 'string') {
-                data[index][keys[i]] = cleanQuotes(values[i]);
-            }
-        }
-    });
-    return data;
+#chart {
+  width: 800px;
+  height: 600px;
 }
-*/
-
-function updateRowOrNot(rownumber, symbol, rank, timestamp, whatToUpdate, configData) {
-    if ( symbol == undefined || symbol == null || symbol == '' ) {
-        return false; // No symbol, so skip this row
-    }
-    if (whatToUpdate.UpdateAll) return true;
-
-    if (whatToUpdate.UpdateTopRank && ((rank!= undefined && rank!= null && rank!='' && rank <= configData.UpdateTopNStocks))) {
-        return true; // Update top ranked stocks
-    }
-
-    if (whatToUpdate.UpdateNew && ( timestamp == undefined || timestamp == null || timestamp == '' )) {
-        return true; // No update timestamp, so process all
-    }
-
-    if (whatToUpdate.UpdateOld) {
-        let datelimit = (new Date()-configData.UpdateMustAfterDays*24*60*60*1000); // Adjust date limit to 52 weeks ago
-        if ( timestamp<datelimit ) { 
-            return true; // Hasn't updated for a long time
-        }
-    }
-                
-    if  ( (rownumber % configData.UpdateEveryNDay )==(configData.RunCount % configData.UpdateEveryNDay ) ) { // Update every N days
-        return true;
-    }
-    return false; // No need to update
+#tooltip {
+  position: absolute;
+  background: white;
+  border: 1px solid gray;
+  border-radius: 5px;
+  padding: 10px;
+  opacity: 0.0;
+  transition: opacity 0.2s;
 }
-
-function CalculateRowScore(dates, prices, configData, stockSymbol) {
-    // Calculate the score based on the row data
-    high = []; // 52-week high
-    dropFromHigh = []; // Drop from 52-week high
-    timeToTimeChange = []; // Time-to-time change in log scale
-    //dates = [];
-    
-    for (n=0; n<dates.length; n++) {
-        if (dates[n] === undefined || dates[n] === null || dates[n] === '' || Number.isNaN(dates[n].getTime())) {
-            dates[n]=null;
-        } else {
-            dates[n]=new Date(dates[n]);
-        }
-    }
-    for (n=0; n<prices.length; n++) {
-        if (prices[n] === undefined || prices[n] === null || prices[n] === '') {
-            prices[n]=null;
-        } else {
-            prices[n]=new Number(prices[n]);
-        }
-    }
-
-    for (n=0; n<dates.length; n++) {
-        if (dates[n] === undefined || dates[n] === null || dates[n] === '' || Number.isNaN(dates[n].getTime())) {
-            high[n]=null;
-            dropFromHigh[n]=null;
-            timeToTimeChange[n]=null;
-            continue; // Skip this row if the date is missing
-        }
-        // Calculate 52-week high
-        let datelimit = (dates[n])-365.25*24*60*60*1000; // Adjust date limit to 52 weeks ago
-        high[n]= prices[n];
-        for (m=n+1; m<dates.length; m++) {
-            if (new Date(dates[m]) < datelimit || dates[m] === undefined || dates[m] === null || dates[m] === '') break;
-            if (high[n]<prices[m]) high[n] = prices[m];
-        }
-        high[n] = Math.max(high[n],0.00000001);
-
-        // Calculate drop from 52-week high
-        dropFromHigh[n] = (high[n] === undefined || high[n] === null || high[n]==='' || prices[n] === null || prices[n]===undefined || prices[n]==='' ? null : Math.max(prices[n]/high[n]-1,-1));
-
-        // Calculate time-to-time change
-        if (n==dates.length-1) {
-            timeToTimeChange[n] = null;
-        } else if (dates[(n+1)] === undefined || dates[(n+1)] === null || dates[(n+1)] === '' || Number.isNaN(dates[n+1].getTime()) ||
-            prices[n] === undefined || prices[n] === null || prices[n] == '' || 
-            prices[(n+1)] === undefined || prices[(n+1)] === null || prices[(n+1)] == '') {
-            timeToTimeChange[n] = null;
-        } else {
-            timeToTimeChange[n] = Math.log10(Math.max(prices[n]/prices[(n+1)],0.00000001));
-        }
-    }
-    Score=[];
-    AllWorstDrop=[];
-    AllRobustChange=[];
-    AllPredErr=[];
-    var OrigRobustChange1, OrigRobustChange2;
-    for(let iter=0, pivot=0; iter<12; iter++, pivot+=4) { // skip 4 weeks
-        // Calculate robust trend (longer term)
-        datelimit = (dates[pivot])-configData.NumDaysForTrend*24*60*60*1000; // Adjust date limit to 52 weeks ago
-        for(n=pivot+1; n<dates.length; n++) {
-            if ((dates[n]) < datelimit || dates[n]=='' || dates[n]===undefined || dates[n]===null || Number.isNaN(dates[n].getTime()) ) break;
-        }
-        n--;
-        if (n==pivot) { // no data available for trend
-            return {
-                //Score: -10,
-                //PriorScore: -10,
-                AllScores: [-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10],
-                NumDays: 0,
-                RobustChange: 0,
-                RobustChangeMostRecent: 0,
-                WorstDrop: 0,
-                AllRobustChange: [-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10],
-                AllWorstDrop: [-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10,-10],
-                ScoreNumDays: 0,
-                ScoreWorstDrop: 0,
-                ScoreRobustChange: 0,
-                dropFromHigh: 0,
-                AllPredErr: [0,0,0,0,0,0,0,0,0,0,0,0],
-            }
-        }
-        duration = ((dates[pivot]) - (dates[n])) / (1000 * 60 * 60 * 24); // Duration in days
-        minTimeToTimeChange1 = percentile(timeToTimeChange.slice(0, n+1), configData.GrowthMinPercentile); // Calculate the minimum time-to-time change in the trend period
-        maxTimeToTimeChange1 = percentile(timeToTimeChange.slice(0, n+1), configData.GrowthMaxPercentile); // Calculate the maximum time-to-time change in the trend period            
-        RobustChange1 = 0;
-        for (m=0; m<n; m++) {
-            RobustChange1 += Math.min(Math.max(timeToTimeChange[m], minTimeToTimeChange1), maxTimeToTimeChange1);
-        }
-        
-        RobustChange1 = RobustChange1 / duration * 365.25; // Annualized average amount of change
-        RobustChange1 = (10 ** RobustChange1) - 1.0; // Convert to a percentage change
-            
-        // Calculate robust trend (shorter term)
-        datelimit = (dates[pivot])-configData.NumDaysForRecentTrend*24*60*60*1000; // Adjust date limit to 52 weeks ago
-        for(n=pivot+1; n<dates.length; n++) {
-            if ((dates[n]) < datelimit || dates[n]=='' || dates[n]===undefined || dates[n]===null || Number.isNaN(dates[n].getTime())) break;
-        }
-        n--;
-        duration = ((dates[pivot]) - (dates[n])) / (1000 * 60 * 60 * 24); // Duration in days
-        minTimeToTimeChange2 = percentile(timeToTimeChange.slice(1, n+1), configData.GrowthMinPercentile); // Calculate the minimum time-to-time change in the trend period
-        maxTimeToTimeChange2 = percentile(timeToTimeChange.slice(1, n+1), configData.GrowthMaxPercentile); // Calculate the maximum time-to-time change in the trend period            
-        RobustChange2 = 0;
-        for (m=0; m<n; m++) {
-            RobustChange2 += Math.min(Math.max(timeToTimeChange[m], minTimeToTimeChange2), maxTimeToTimeChange2);
-        }
-        RobustChange2 = RobustChange2/duration* 365.25; // Annualized average amount of change
-        RobustChange2 = (10 ** RobustChange2) - 1.0; // Convert to a percentage change
-
-        // Calculate worst drop
-        datelimit = (dates[pivot])-configData.DropWindowInDays*24*60*60*1000; // Adjust date limit to 52 weeks ago
-        for(n=pivot+1; n<dates.length; n++) {
-            if ((dates[n]) < datelimit || dates[n]=='' || dates[n]===undefined || dates[n]===null || Number.isNaN(dates[n].getTime())) break;
-        }
-        n--;
-        WorstDrop = percentile(dropFromHigh.slice(0, n+1), configData.DropPercentile); // Calculate the worst drop in the trend period
-
-        // Find number of days available
-        datelimit = (dates[pivot])-(3*365.25)*24*60*60*1000; // Adjust date limit to 3 years ago
-        for(n=pivot+1; n<dates.length; n++) {
-            if ((dates[n]) < datelimit || dates[n]=='' || dates[n]===undefined || dates[n]===null || Number.isNaN(dates[n].getTime())) break;
-        }
-        n--;
-        NumDays = ((dates[pivot]) - (dates[n]))/(24*60*60*1000); // Number of days available for trend
-            
-        // Calculate scores
-        if (pivot==0) {
-            OrigRobustChange1 = RobustChange1;
-            OrigRobustChange2 = RobustChange2;
-        }
-        RobustChange = Math.min(RobustChange1, RobustChange2); 
-        ScoreRobustChange = Math.log10((RobustChange>=0?RobustChange:-RobustChange)*5+1)* (RobustChange>=0?1:-1);
-        ScoreWorstDrop = Math.log10((1+WorstDrop)*10+1)/Math.log10(11); // Normalize worst drop to a score between 0 and 1
-        ScoreNumDays = Math.log10(NumDays + 1)/Math.log10(365.25+1);
-        Score[iter] = (ScoreRobustChange+ScoreWorstDrop)*ScoreNumDays; // Combine scores
-        AllRobustChange[iter] = RobustChange;
-        AllWorstDrop[iter] = WorstDrop;
-        if (false) {
-            console.log(`Score for row ${row['Symbol']}:`);
-            console.log(`- Robust change: ${RobustChange1}, ${RobustChange2} -> ${ScoreRobustChange}`);
-            console.log(`- Worst drop   : ${WorstDrop} -> ${ScoreWorstDrop}`);
-            console.log(`- NumDays       : ${NumDays} -> ${ScoreNumDays}`);
-        }
-
-        // Calculate R^2 match in last year
-        datelimit = (dates[pivot])-(1*365.25)*24*60*60*1000; // Adjust date limit to 1 years ago
-        var total_err=0;
-        for(n=pivot+1; n<dates.length; n++) {
-          if ((dates[n]) < datelimit || dates[n]=='' || dates[n]===undefined || dates[n]===null || Number.isNaN(dates[n].getTime()) || Number.isNaN(prices[n])) break;
-          const startDate = new Date(dates[pivot]); // First date of the series
-          const currentDate = new Date(dates[n]);
-          // Calculate difference in days, then convert to years for exponentiation
-          const daysDiff = (currentDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24);
-          const thisY2 = ((Math.pow((RobustChange + 1), (daysDiff / 365.25))) - 1);
-          const thisX2 = prices[n]/prices[pivot]-1;
-          total_err += (thisX2 - thisY2)*(thisX2 - thisY2);
-        }        
-        if (n>pivot+1) {
-            n -= pivot+1;
-            AllPredErr[iter] = Math.sqrt(total_err / n); 
-        }
-    }
-
-    return {
-        //Score: Score[0],
-        //PriorScore: Score[1],
-        AllScores: Score,
-        NumDays: NumDays,
-        RobustChange: OrigRobustChange1,
-        RobustChangeMostRecent: OrigRobustChange2,
-        WorstDrop: WorstDrop,
-        AllRobustChange: AllRobustChange,
-        AllWorstDrop: AllWorstDrop,
-        ScoreNumDays: ScoreNumDays,
-        ScoreWorstDrop: ScoreWorstDrop,
-        ScoreRobustChange: ScoreRobustChange,
-        dropFromHigh: dropFromHigh,
-        AllPredErr: AllPredErr,
-    };
+.tooltip {
+  border-collapse: collapse;
+  width: 100%;
 }
+.tooltip th, .tooltip td {
+  border: 1px solid #c0c0c0;
+  padding: 8px;
+  text-align: left;
+}
+.datatable th {
+  background-color: #f2f2f2;
+}
+.datatable {
+  border-collapse: collapse;
+  width: 100%;
+}
+.datatable th, .datatable td {
+  border: 1px solid #c0c0c0;
+  padding: 8px;
+  text-align: left;
+}
+.datatable th {
+  background-color: #f2f2f2;
+}
+.datatable tr:hover {
+      background-color: #f0f0f0;
+    }
 
-// --- Database Integration (Conceptual) ---
-/*
-To save to a database, you would:
-1.  **Install a database driver:** e.g., `pg` for PostgreSQL, `mysql2` for MySQL, `mongodb` for MongoDB.
-2.  **Establish a connection:** Create a client or connection pool.
-3.  **Define your schema/collection:** Determine how you want to structure your table data in the database.
-4.  **Insert the data:** Iterate through `allExtractedData` and insert each table's data into your database.
+.hidden {
+  display: none;
+}
+a:hover {color: red;}
+a { color: black; text-decoration: none;}
+.category-container-class input[type='radio'] {
+  display: none;
+}
+.category-button {
+  display: block;
+  padding: 2px 10px;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  border-radius: 5px;
+  width: 160px;
+  font-weight: normal;
+  opacity: 0.5;
+  margin-top: 5px;
+}
+.category-button.checked {
+  border: 2px solid #000;
+  font-weight: bold;
+  opacity: 1;
+}
+</style>
+</head>
 
-Example for PostgreSQL (using `pg` package):
+<body>
+  <table width=100% class='layout'><TR>
+  <TD colspan=2>
+  <FONT SIZE='+2'>Top stocks <A onclick='showHelpInfo(event)' onmouseover='showHelpInfo(event)'>&#9432;</FONT></A><BR>
+  <DIV id='updatetimestamp'></DIV>
+  </TD></TR>
+  <TR>
+  <TD width=85% align=middle><div id='chart'></div></TD>
+  <TD valign=top width=15%>
+    <B>Sector</B><div id='category-container' class='category-container-class'></div><BR>
+    <B>Prediction error</B><div id='prederr-container' class='category-container-class'></div>
+  </TD></TR>
+  <TR><TD colspan=2><div id='table-container'></div></TD></TR>
+  </TABLE>
+  <div id='tooltip'></div>
 
-const { Pool } = require('pg');
+<script src='https://d3js.org/d3.v7.min.js'></script>
+<script src='https://jeffreytsaoprivate.github.io/stocks/topstocks.js'></script>
+<script>
+//------------------------------------------------
+// Global variables
+let highlightItem = null;
+let filterItem = '';
+let lo_opacity = 0.05;
+let mid_opacity = 0.2;
+let showCategory = 'Show all';
+let showPredErr = 'Show All';
+let svg;
 
-const pool = new Pool({
-    user: 'your_user',
-    host: 'localhost',
-    database: 'your_database',
-    password: 'your_password',
-    port: 5432,
+function loadScript(src, forcereload = true) {
+  const script = document.createElement('script');
+  script.type = "text/javascript";  
+  if (forcereload) {
+     script.src = src + "?v=" + (Math.floor(Math.random() * (1000000 - 1 + 1)) + 1);
+  } else {
+     script.src = src;
+  }
+  document.head.appendChild(script);
+}
+loadScript("https://jeffreytsaoprivate.github.io/stocks/topstocks.js");
+
+data.forEach(d => {
+  if (d.sector.startsWith('Basic Materials') || d.sector.endsWith('Basic Materials')) {
+    d.color = '#FFECD1';
+  } else if (d.sector.startsWith('Communication Services') || d.sector.endsWith('Communication Services')) {
+    d.color = '#F00000';
+  } else if (d.sector.startsWith('Consumer Cyclical') || d.sector.endsWith('Consumer Cyclical')) {
+    d.color = '#0080FF';
+  } else if (d.sector.startsWith('Consumer Defensive') || d.sector.endsWith('Consumer Defensive')) {
+    d.color = '#80FF00';
+  } else if (d.sector.startsWith('Energy') || d.sector.endsWith('Energy')) {
+    d.color = '#C0C000';
+  } else if (d.sector.startsWith('Financial Services') || d.sector.endsWith('Financial Services')) {
+    d.color = '#00FF00';
+  } else if (d.sector.startsWith('Healthcare') || d.sector.endsWith('Healthcare')) {
+    d.color = '#008000';
+  } else if (d.sector.startsWith('Industrials') || d.sector.endsWith('Industrials')) {
+    d.color = '#C0C0C0';
+  } else if (d.sector.startsWith('Real Estate') || d.sector.endsWith('Real Estate')) {
+    d.color = '#800080';
+  } else if (d.sector.startsWith('Technology') || d.sector.endsWith('Technology')) {
+    d.color = '#0000FF';
+  } else if (d.sector.startsWith('Utilities') || d.sector.endsWith('Utilities')) {
+    d.color = '#808080';
+  } else {
+    d.color = '#000000';
+  }
+  d.outlinecolor = '#000000';
+  d.opacity = 1;
+  var dateStrings = d.date;
+  d.datevalue = dateStrings.map(dateString => new Date(dateString));
 });
 
-async function saveToDatabase(data) {
-    for (const table of data) {
-        const { sourceUrl, className, headers, rows } = table;
-        try {
-            // Example: Insert into a 'scraped_tables' table
-            const query = `
-                INSERT INTO scraped_tables (source_url, class_name, headers_json, rows_json)
-                VALUES ($1, $2, $3, $4)
-            `;
-            await pool.query(query, [sourceUrl, className, JSON.stringify(headers), JSON.stringify(rows)]);
-            console.log(`Saved table from ${sourceUrl} to database.`);
-        } catch (error) {
-            console.error(`Error saving table from ${sourceUrl} to database: ${error.message}`);
-        }
-    }
+if (typeof updatetimestamp !== 'undefined') {
+  d3.select('#updatetimestamp').html(updatetimestamp);
 }
 
-// Call this instead of saveData in the main execution:
-// await saveToDatabase(extractedData);
-*/
+const width = 800;
+const height = 600;
+svg = d3.select('#chart').append('svg').attr('width', width).attr('height', height);
+const viewcategories = ['Show all', 'Basic Materials', 'Communication Services', 'Consumer Cyclical', 'Consumer Defensive', 'Energy', 'Financial Services', 'Healthcare', 'Industrials', 'Real Estate', 'Technology', 'Utilities', 'Others'];
+const categorycolors = ['#ffffff', '#FFECD1', '#F00000', '#0080FF', '#80FF00', '#C0C000', '#00FF00', '#008000', '#C0C0C0', '#800080', '#0000FF', '#808080', '#000000'];
+const categoryfontcolors = ['#000', '#000', '#fff', '#fff', '#000', '#fff', '#000', '#fff', '#000', '#fff', '#fff', '#fff', '#fff'];
 
-
-// Main function to create the email HTML
-/**
- * Generates an HTML email for stock updates based on provided data.
- * This function is an adaptation of the original VBA 'createEmail' subroutine.
- *
- * @param {Array<Array<any>>} tmpdata - A 0-indexed 2D array containing stock data rows.
- * Each inner array represents a row of data.
- * This data is assumed to be already prepared (e.g., from an Excel parse).
- * @param {number} numColsBeforeStockData - This parameter defines the 0-indexed column
- * where the stock-related time series data (dates, values) begins
- * within each `tmpdata` row.
- * @param {number} numTimePoints - The number of historical time points (e.g., days, months)
- * for which chart data (dates, loss, trajectory, actual values) is available.
- * @returns {Promise<string>} A Promise that resolves with the complete HTML string of the email.
- */
-async function createEmail(extractedData, numTimePoints, configData) {
-    // --- Configuration Constants ---
-    const emailRecipients = "jeffrey.tsao.home@gmail.com";
-    const emailSubject = `Stock update - ${FormatDate(new Date(), "MMM d, YYYY")}`;
-    // HTML prefix containing global styles and the main container div
-    const HTMLprefix = `<html>
-<head><style>
-body {background-color: #D0D0D0; font-family: Arial, Helvetica, sans-serif;}
-p{margin:0px;}
-p.normal {font-weight: normal; font-size: 0.875em; color: black;}
-p.light {font-weight: normal; font-size: 0.5em; color: grey;}
-p.bigger {font-weight: normal; font-size: 1em; color: black;}
-p.huge {font-weight: normal; font-size: 1.5em; color: black;}
-p.price {text-align: right; font-weight: normal; font-size: 1.25em; color: black;}
-p.small {font-weight: normal; font-size: 0.75em; color: grey;}
-a:link {color: black; text-decoration: none;} a:visited {color: grey; text-decoration: none;} a:hover {text-decoration: underline;} a:active {text-decoration: underline;}
-.container {background-color: #D0D0D0; display: grid; grid-auto-rows: auto-fit; grid-template-rows: auto; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
-.tile {border: 5px solid white; background-color: white;}
-.redbadge {background-color: red; color: white; padding: 2px 4px; text-align: center; font-size: 0.7em; border-radius: 5px;}
-.bluebadge {background-color: blue; color: white; padding: 2px 4px; text-align: center; font-size: 0.7em; border-radius: 5px;}
-.greybadge {background-color: lightgrey; color: black; padding: 2px 4px; text-align: center; font-size: 0.7em; border-radius: 5px;}
-.checked {color: orange;}
-</style></head>
-<body><p.small>Link to <A HREF="https://jeffreytsaoprivate.github.io/stocks/topstocks.html">[<B>stock dashboard</B>]</A> <font size=0.5em>(updated ${FormatDateTime(new Date())})</font></p><div class='container'>`;
-
-    // HTML suffix to close the container and body
-    const HTMLsuffix = `</div></body></html>`;
-
-    // QuickChart.io URL components for generating charts dynamically
-    const imghtmlprefix = "https://quickchart.io/chart?w=120&h=100&c={type:'line',options:{legend:false,title:{display:false},scales:{yAxes:[{ticks:{fontSize:8,stepSize:20}}],xAxes:[{display:true,ticks:{fontSize:8,autoSkip:true}}]},plugins:{tickFormat:{suffix:'%'}}},data:{labels:[";
-    const imghtmlmid = "],datasets:[";
-    const imghtmldataprefix = "{data:[";
-    const imghtmldatasuffix1 = "],fill:false,borderColor:'%23c00000',borderDash:[1,1],borderWidth:1,pointRadius:0}"; // Loss from 52-wk high
-    const imghtmldatasuffix2 = "],fill:false,borderColor:'blue',borderDash:[3,3],borderWidth:0.5,pointRadius:0}"; // Trajectory
-    const imghtmldatasuffix3 = "],fill:false,borderColor:'blue',borderWidth:1,pointRadius:0}"; // Actual data
-    const imghtmlsuffix = "]}}";
-
-    // Equivalent to VBA's 'If lastrow < 3 Then Exit Sub', accounting for 0-indexed data array.
-    // If tmpdata is empty, it means no data rows (less than 1 actual data row).
-    if (extractedData.length <= 0) {
-        console.log("No data provided in tmpdata array. Exiting.");
-        return ""; // Return an empty HTML string
-    }
-    process.stdout.write(`Creating email with ${extractedData.length} rows of data.`);
-
-    // Sorts the `tmpdata` array in-place based on the 'Rank' column (ascending order).
-    let label1 = 'Rank';
-    extractedData = [...extractedData].sort((a, b) => // if a>b, then -'ve, if b>a, then +'ve
-                (b['Invalid']!==undefined && b['Invalid']!==null && b['Invalid']!=='' ? -1 : 
-                (a['Invalid']!==undefined && a['Invalid']!==null && a['Invalid']!=='' ? +1 : 
-                (b[label1]===undefined || b[label1]===null || b[label1]==='' || Number.isNaN(b[label1]) || b[label1]=='NaN' ? -1 :
-                (a[label1]===undefined || a[label1]===null || a[label1]==='' || Number.isNaN(a[label1]) || a[label1]=='NaN' ? +1 :  
-                    a[label1] - b[label1]
-                ))))); // Ascending order
-
-    // Find the first entry with Rank 1 (to start iterating from the top-ranked stock)
-    let firstRow = -1;
-    for (let i = 0; i < extractedData.length; i++) {
-        if (extractedData[i]['Rank'] !== '' && Number.isNaN(extractedData[i]['Rank'])==false  && extractedData[i]['Rank']!=='NaN' && (extractedData[i]['Invalid']===undefined || extractedData[i]['Invalid']===null || extractedData[i]['Invalid']=='')) {
-            firstRow = i;
-            break; // Found the first rank 1, exit loop
-        }
-    }
-    if (firstRow === -1) { // If no stock with rank 1 is found, there's nothing to display
-        console.log(" No stock found with a rank of 1 after sorting. Email will be empty.");
-        return HTMLprefix + HTMLsuffix; // Return basic HTML structure with no content
-    }
-
-    let HTMLtxt = ""; // Accumulator for the HTML content of individual stock tiles
-
-    // --- Generate HTML for up to 30 top-ranked stocks ---
-    // The loop variable `j` represents the current rank (1-indexed for display purposes).
-    // `i` represents the 0-indexed row index in the sorted `tmpdata` array.
-    let CurrentRow = firstRow;
-    for (let top_i = 1; top_i <= 30; top_i++) {
-        if (CurrentRow >= extractedData.length)  break; // Stop if we exceed the available data rows
-        rowData = extractedData[CurrentRow]; // Get the current stock's data row
-        CurrentRow++;
-        if (rowData['Invalid']!==undefined && rowData['Invalid']!==null && rowData['Invalid']!='') continue;
-        //if (CurrentRank==1) console.dir(rowData);
-        dates=[];
-        prices=[];
-        for (let i = 0; i < NumDates; i++) {
-            dates[i] = new Date(rowData[`Date ${i+1}`]);
-            prices[i] = Number(rowData[`Close ${i+1}`]);
-        }
-        RowResults = CalculateRowScore(dates,prices,configData,rowData['Symbol']);
-        
-                    //console.dir(RowResults); // Log the row results for debugging
-        // --- Determine Rank Change Text ---
-        let ranktxt = "";
-        CurrentRank = rowData['Rank'];
-        const PriorRank = rowData['Rank_1']; // Get the prior rank value from the row data
-        // Check if prior rank is valid/numeric
-        if (PriorRank === "" || PriorRank === null || PriorRank === undefined || !isNumeric(PriorRank)) {
-            ranktxt = "New"; // If no prior rank, it's a "New" entry
-        } else {
-            // Compare current rank (CurrentRank) with prior rank
-            if (PriorRank === CurrentRank) {
-                ranktxt = "~"; // No change in rank
-            } else if (PriorRank > CurrentRank) {
-                // Rank improved (moved up)
-                ranktxt = `<FONT COLOR=#40C040>&#9650;${(PriorRank - CurrentRank)}</FONT>`; // Green up arrow
-            } else {
-                // Rank declined (moved down)
-                ranktxt = `<FONT COLOR=#C04040>&#9660;${(CurrentRank - PriorRank)}</FONT>`; // Red down arrow
-            }
-        }
-
-        // --- Prepare Chart Data for QuickChart.io ---
-        let datax = []; // X-axis labels (dates)
-        let datay1 = []; // Data for line 1 (Loss from 52-wk high)
-        let datay2 = []; // Data for line 2 (Trajectory)
-        let datay3 = []; // Data for line 3 (Actual data)
-
-        //const MinRobustChange = Math.min(RowResults.RobustChange,RowResults.RobustChangeMostRecent); // Annual change value from the row results
-        const MinRobustChange = RowResults.AllRobustChange[0]; // (Most recent) Annual change value from the row results
-
-        // Iterate through historical time points (k is 0-indexed offset for array access)
-        for (let k = 0; k < numTimePoints; k++) {
-            //const dateValue = dates[k];
-            const latestPrice = prices[0]; // First stock price in the series
-            const price = prices[k]; // Current stock price
-            const lossValue = RowResults.dropFromHigh[k]; // Loss from 52-wk high from the row results
-
-/*
-                if (n==0) { // no data available for trend
-        return {
-            Score: -10,
-            NumDays: 0,
-            RobustChange: 0,
-            RobustChangeMostRecent: 0,
-            WorstDrop: 0,
-            ScoreNumDays: 0,
-            ScoreWorstDrop: 0,
-            ScoreRobustChange: 0,
-            dropFromHigh: dropFromHigh,
-        }
-    }*/
-
-            // Ensure all necessary data for this time point is valid and numeric/date
-            if (isDateOrTime(dates[k]) &&
-                isNumeric(MinRobustChange) &&
-                isNumeric(price) &&
-                isNumeric(latestPrice) &&
-                isNumeric(lossValue)
-            ) {
-                // Add data to the beginning of arrays (`unshift`) to match VBA's `datax = ... & datax` reversal
-                datax.unshift(`'${FormatDate(dates[k],"M/YY")}'`); // Format date for chart label (e.g., '1/24')
-
-                // Calculate and format data for Loss from 52-wk high (Y1)
-                const thisY1 = FormatNumber((lossValue * 100), "0");
-                datay1.unshift(thisY1);
-
-                // Calculate and format data for Trajectory (Y2)
-                // VBA formula: ((AnnualChange + 1) ^ ((CurrentDate - StartDate) / 365.25) - 1) * 100
-                const startDate = new Date(dates[0]); // First date of the series
-                const currentDate = new Date(dates[k]);
-                // Calculate difference in days, then convert to years for exponentiation
-                const daysDiff = (currentDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24);
-                const thisY2 = FormatNumber(((Math.pow((MinRobustChange + 1), (daysDiff / 365.25))) - 1) * 100, "0");
-                datay2.unshift(thisY2);
-
-                // Calculate and format data for Actual Performance (Y3)
-                // VBA formula: (CurrentValue / FirstValue - 1) * 100
-                const thisY3 = FormatNumber(((price / latestPrice) - 1) * 100, "0");
-                datay3.unshift(thisY3);
-            } else {
-                break; // If data is incomplete for any time point, stop gathering chart data for this stock
-            }
-        }
-
-        // --- Price and Price Change HTML Construction ---
-        const descriptionLimit = 200; // Limit for stock description text
-        let priceChangeHtml = "";
-        const price = rowData['Last price']; // Corresponds to VBA column 11
-        const priceChange = rowData['Last change']; // Corresponds to VBA column 12
-
-        // Check if price and price change values are valid numbers
-        if (!isNumeric(price) || !isNumeric(priceChange)) {
-            priceChangeHtml = ""; // No price change HTML if data is invalid
-        } else {
-            // Determine color based on price change direction
-            if (priceChange > 0.01) {
-                priceChangeHtml = `&nbsp;<font size=2em color='#00B050'>`; // Green for positive change
-            } else if (priceChange < -0.01) {
-                priceChangeHtml = `&nbsp;<font size=2em color='#C00000'>`; // Red for negative change
-            } else {
-                priceChangeHtml = `&nbsp;<font size=2em color='#C0C0C0'>`; // Grey for no significant change
-            }
-
-            // Calculate percentage change and format it
-            // The VBA condition `tmpdata(i, 11) = tmpdata(i, 12)` (price = priceChange) is unusual;
-            // it might imply a scenario where the price change is zero or undefined.
-            // I'm assuming it means if `priceChange` is exactly 0.
-            if (priceChange === 0) {
-                priceChangeHtml += `0.00%</font>`; // Explicitly show 0.00%
-            } else {
-                // Using the original VBA formula for percentage change: priceChange / (price - priceChange) * 100
-                const percentageChange = (priceChange / (price - priceChange)) * 100;
-                priceChangeHtml += `${FormatNumber(percentageChange, "+0.00;-0.00;0.00")}%</font>`;
-            }
-        }
-        if (rowData['Hierarchy - industry'] === "" && rowData['Hierarchy - sector'] === "") {
-            sectortxt = "";
-        } else {
-            sectortxt = `<font size=0.7em color=#A0A0A0>Sector:</FONT>&nbsp;<FONT size=0.9em color=#000000>${rowData['Hierarchy - sector']}`
-            if (rowData['Hierarchy - industry'] !== "" && rowData['Hierarchy - industry'] !== null) { 
-                sectortxt += ` &gt; ${rowData['Hierarchy - industry']}`;
-            }
-            sectortxt += `</font>`;
-        }                                                                       
-        imgtxt = `<IMG width=150px height=125px SRC="${imghtmlprefix}${datax.join(',')}${imghtmlmid}${imghtmldataprefix}${datay1.join(',')}${imghtmldatasuffix1},${imghtmldataprefix}${datay2.join(',')}${imghtmldatasuffix2},${imghtmldataprefix}${datay3.join(',')}${imghtmldatasuffix3}${imghtmlsuffix}">`;
-        descriptiontxt = rowData['Company profile']; 
-        if (descriptiontxt.length>descriptionLimit) {
-            descriptiontxt = descriptiontxt.substring(0, descriptionLimit) + "...";
-        }
-
-        // --- Assemble HTML for the current stock's "tile" ---
-        // This large string uses template literals for readability and easy embedding of variables.
-        HTMLtxt += `<div class='tile'>
-    <TABLE width=300px>
-        <TR>
-            <TD><p class='bigger'><B>${CurrentRank}</B><BR><font size=0.7em color=#A0A0A0>${ranktxt}</font></P></TD>
-            <TD><p class='huge'><A HREF='https://finance.yahoo.com/quote/${rowData['Symbol']}/'>${rowData['Symbol']}</A></p>
-                <font size=1em><A HREF='https://finance.yahoo.com/quote/${rowData['Symbol']}/'>${rowData['Name']}</A></font>
-            </TD>
-            <TD ROWSPAN=3>
-                <p class='price'>${FormatNumber(price, "0.00")}${priceChangeHtml}&nbsp;</p>
-                ${imgtxt}<BR>
-                <p class='normal'>${sectortxt}</p>
-            </TD>
-        </TR>
-        <TR>
-            <TD COLSPAN=2>
-                <p class='normal'><font size=1em color=#000000>${descriptiontxt}</font></p>
-            </TD>
-        </TR>
-        <TR>
-            <TD COLSPAN=2>
-                <p class='normal'><font size=0.7em color=#A0A0A0>Annual change</FONT><B> ${FormatNumber(MinRobustChange, "+#.0%;-#.0%")}</B></p>
-                <p class='normal'><font size=0.7em color=#A0A0A0>10%ile 52wk drop</FONT><B> ${FormatNumber(RowResults['WorstDrop'], "+#.0%;-#.0%")}</B></p>
-            </TD>
-        </TR>
-    </TABLE>
-</div>`;
-    }
-
-    const finalHTML = HTMLprefix + HTMLtxt + HTMLsuffix; // Combine all parts into the final HTML
-
-    await writeTxt("./email.html", finalHTML); // Save the generated HTML to a file
-
-    // --- Output and Emailing ---
-    process.stdout.write(`\r                                                                           `); // Clear the line
-    process.stdout.write("\rSending email...");
-    // The `sendEmail` function is a placeholder and needs to be implemented
-    // based on your JavaScript environment (browser or Node.js) and chosen email service.
-
-    const email = require("../lib/email.js");
-    await email.sendEmail(emailRecipients, emailSubject, finalHTML, true);
-    console.log(" Done.");
-
-    return finalHTML; // Return the full HTML content
+function createCategoryButtons(container, options, optioncolors, optionfontcolors, groupName = 'option') {
+  options.forEach((option, index) => {
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = groupName;
+    input.value = option;
+    input.checked = (index == 0);
+    input.id = `${groupName}-${index}`;
+    const label = document.createElement('label');
+    label.htmlFor = `${groupName}-${index}`;
+    label.innerHTML = option;
+    label.value = option;
+    label.style.color = optionfontcolors[index];
+    label.style.backgroundColor = optioncolors[index];
+    label.classList.add('category-button');
+    if (index == 0) label.classList.add('checked');
+    container.appendChild(input);
+    container.appendChild(label);
+  });
+  const categoryButtons = container.querySelectorAll('.category-button');
+  categoryButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      categoryButtons.forEach(btn => btn.classList.remove('checked'));
+      button.classList.add('checked');
+    });
+  });
 }
 
-
-/**
- * Creates an HTML web page and JavaScript data for stock visualization,
- * then uploads them to GitHub.
- *
- * @param {Array<Array<any>>} excelData The 0-indexed 2D array representing the Excel data.
- * This array should mimic the structure of `tmpdata` from the VBA, but 0-indexed.
- * @param {number} numColumnsBeforeStockData The 0-indexed column index where stock date/value data starts.
- * @param {number} numTimePoints The number of time points (e.g., 52 weeks).
- * @param {string} githubToken Your GitHub Personal Access Token.
- * @returns {Promise<void>} A Promise that resolves when the upload is complete.
- */
-async function createWebPage(extractedData, NumDates, configData) {
-    
-    if (extractedData.length < 1) return; // No data to process
-    
-    
-    // Sorts the `tmpdata` array in-place based on the 'Rank' column (ascending order).
-    extractedData = [...extractedData].sort((a, b) => a['Rank'] - b['Rank']); // Ascending order
-
-    // Find the first entry with Rank 1 (to start iterating from the top-ranked stock)
-    let firstRow = -1;
-    for (let i = 0; i < extractedData.length; i++) {
-        if (!isEmpty(extractedData[i]['Rank']) !== '' && (extractedData[i]['Invalid']===undefined || extractedData[i]['Invalid']===null || extractedData[i]['Invalid']=='')) {
-            firstRow = i;
-            break; // Found the first rank 1, exit loop
-        }
+function changeCategory() {
+  const button = document.querySelector('input[name=\'sector-option\']:checked');
+  const selectedOption = button.value;
+  if (showCategory == selectedOption) {
+    showCategory = 'Show all';
+    const categoryButtons = document.querySelectorAll('.category-button');
+    categoryButtons.forEach(button => {
+      button.classList.remove('checked');
+      if (button.value == 'Show all') button.classList.add('checked');
+    });
+  } else {
+    showCategory = selectedOption;
+  }
+  highlightItem = null;
+  hideTooltip();
+  updateOpacity();
+  updateGraphics();
+  sortTable('datatable', 0, true);
+}
+function changePredErr() {
+  const button = document.querySelector("input[name='prederr-option']:checked");
+  const selectedOption = button.value;
+  if (showPredErr === selectedOption) {
+    showPredErr = 'Show All';
+    const buttons = document.querySelectorAll('#prederr-container .category-button');
+    buttons.forEach(b => { b.classList.remove('checked'); if (b.value === 'Show All') b.classList.add('checked'); });
+  } else {
+    showPredErr = selectedOption;
+  }
+  highlightItem = null;
+  hideTooltip();
+  updateOpacity();
+  updateGraphics();
+  sortTable('datatable', 0, true);
+}
+function updateOpacity_OLD() {
+  if (highlightItem == null) {
+    if (showCategory == 'Show all') {
+      data.forEach(d => {
+        d.opacity = 1;
+      });
+    } else {
+      data.forEach(d => {
+        d.opacity = (d.sector.startsWith(showCategory) ? 1 : lo_opacity);
+      });
     }
-    if (firstRow === -1) { // If no stock with rank 1 is found, there's nothing to display
-        console.log("No stock found with a rank of 1 after sorting.");
-        return;
+  } else {
+    if (showCategory == 'Show all') {
+      data.forEach(d => {
+        d.opacity = (d.symbol == highlightItem ? 1 : lo_opacity);
+      });
+    } else {
+      data.forEach(d => {
+        d.opacity = (d.symbol == highlightItem ? 1 : (d.sector.startsWith(showCategory) ? mid_opacity : lo_opacity));
+      });
     }
+  }
+}
+function updateOpacity() {
+  // parse PredErr threshold
+  let PredErrThreshold = null;
+  if (showPredErr && showPredErr !== 'Show All') {
+    PredErrThreshold = parseInt(showPredErr.replace('% or less',''), 10); // 95 from "95%+"
+  }
+  function matchesSector(d) {
+    return (showCategory === 'Show all' || showCategory === 'Show All') ? true : d.sector.startsWith(showCategory);
+  }
+  function matchesPredErr(d) {
+    return PredErrThreshold === null ? true : ( (d.AllPredErr[0] || 0) <= PredErrThreshold );
+  }
 
-
-    process.stdout.write("Creating HTML...");
-   
-    //let jsDataContent = `const updatetimestamp = '${FormatDate(new Date(),"MMM d, YYYY")}';\nconst data = [`;
-    let jsDataContent = `const updatetimestamp = '${FormatDateTime(new Date())}';\nconst data = [`;
-
-    // VBA: For j = 1 To lastrow - FirstEntry + 1
-    // Iterate from the `firstEntryRowIndex` until the end of the sorted data
-    for (let currentRowIndex = firstRow; currentRowIndex < extractedData.length; currentRowIndex++) {
-        const rowData = extractedData[currentRowIndex];
-        if (!isEmpty(rowData['Invalid'])) continue;
-        if (isNaN(rowData['Score']) || isEmpty(rowData['Score'])) continue;
-
-        // Calculate results for this row
-        dates=[];
-        prices=[];
-        for (let i = 0; i < NumDates; i++) {
-            dates[i] = new Date(rowData[`Date ${i+1}`]);
-            prices[i] =Number(rowData[`Close ${i+1}`]);
-        }
-        RowResults = CalculateRowScore(dates,prices,configData,rowData['Symbol']);
-        const name = String(rowData['Name']).replace(/'/g, "&#39;");
-        const symbol = String(rowData['Symbol']).replace(/'/g, "&#39;");
-        //const RobustChange = Math.min(RowResults['RobustChange'],RowResults['RobustChangeMostRecent']);
-        const RobustChange = RowResults['AllRobustChange'][0];
-        const annualChange = (RobustChange * 100).toFixed(2);
-        const worstDrop = (RowResults['WorstDrop'] * 100).toFixed(2);
-        const marketCap = isEmpty(rowData['Market cap']) ? 0.1 : Number(rowData['Market cap']).toFixed(0);
-        const sector = rowData['Hierarchy - sector'] + (isEmpty(rowData['Hierarchy - industry']) ? "" : ` > ${rowData['Hierarchy - industry']}`);
-        let rowJsData = `{
-            rank:${rowData['Rank']},
-            name:'${name}',
-            symbol:'${symbol}',
-            change:${annualChange},
-            drop:${worstDrop},
-            mktcap:${marketCap},
-            sector:'${sector}',`;
-
-        {
-            let RobustChangeLabels = []; // Stores formatted dates for chart
-            let WorstDropLabels = []; // Stores loss values
-            for (let k = 0; k < RowResults.AllRobustChange.length; k++) {
-                const MyRobustChange = (RowResults.AllRobustChange[k] * 100).toFixed(2);
-                const WorstDrop = (RowResults.AllWorstDrop[k] * 100).toFixed(2);                
-                RobustChangeLabels.push(`${MyRobustChange}`);
-                WorstDropLabels.push(`${WorstDrop}`);
-            }
-            rowJsData += `
-                AllRobustChange:[${RobustChangeLabels.join(",")}],
-                AllWorstDrop:[${WorstDropLabels.join(",")}],`;
-        }
-
-        {
-            let AllPredErrLabels = []; // Stores formatted dates for chart
-            for (let k = 0; k < RowResults.AllRobustChange.length; k++) {
-                const AllPredErr = (RowResults.AllPredErr[k] * 100).toFixed(2);
-                AllPredErrLabels.push(`${AllPredErr}`);
-            }
-            rowJsData += `
-                AllPredErr:[${AllPredErrLabels.join(",")}],`;
-        }
-
-        let dateLabels = []; // Stores formatted dates for chart
-        let lossData = []; // Stores loss values
-        let trajectoryData = []; // Stores trajectory values
-        let priceData = []; // Stores actual price values
-        const MostRecentDate = new Date(dates[0]);
-        const MostRecentPrice = prices[0]; // First price in the series;
-
-        // VBA: For k = 1 To 52 * 2 (max iterations)
-        if (isNumeric(RobustChange)  && !isEmpty(MostRecentPrice) && isNumeric(MostRecentPrice)) {
-            for (let k = 0; k <= Math.min(52 * 2, NumDates); k++) {
-                const dateValue = new Date(dates[k]);
-                if (isEmpty(dateValue) || !isDateOrTime(dateValue)) break;
-                
-                const priceValue = prices[k];;
-                if (isEmpty(priceValue) || !isNumeric(priceValue)) break;
-
-                dateLabels.push(`'${FormatDate(dateValue, "YYYY-MM-DD")}'`);
-                lossData.push(FormatNumber(RowResults['dropFromHigh'][k] * 100, "0")); // loss
-
-                // thisy = Format(((tmpdata(i, Col_AnnualChange) + 1) ^ ((tmpdata(i, NumColumnsBeforeStockData + k) - tmpdata(i, NumColumnsBeforeStockData + 1)) / 365.25) - 1) * 100, "0")
-                const daysDifference = (dateValue.getTime() - MostRecentDate.getTime()) / (1000 * 60 * 60 * 24);
-                const trajectoryCalc = ((Math.pow(RobustChange + 1, (daysDifference / 365.25)) - 1) * 100);
-                trajectoryData.push(FormatNumber(trajectoryCalc, "0")); // trajectory
-
-                // thisy = Format((tmpdata(i, NumColumnsBeforeStockData + k + NumTimePoints) / tmpdata(i, NumColumnsBeforeStockData + 1 + NumTimePoints) - 1) * 100, "0")
-                const priceCalc = (priceValue / MostRecentPrice - 1) * 100;
-                priceData.push(FormatNumber(priceCalc, "0")); // actual
-            }
-        }
-
-        // VBA: pricechangehtml logic
-        let priceChangeHtml = "";
-        const price =rowData['Last price'];
-        const priceChange = rowData['Last change']; // Corresponds to VBA column 12
-
-        if (!isEmpty(MostRecentPrice) && isNumeric(MostRecentPrice) && !isEmpty(priceChange) && isNumeric(priceChange)) {
-            if (priceChange > 0.01) {
-                priceChangeHtml = "&nbsp;<font size=2em color='#00B050'>"; // Green
-            } else if (priceChange < -0.01) {
-                priceChangeHtml = "&nbsp;<font size=2em color='#C00000'>"; // Red
-            } else {
-                priceChangeHtml = "&nbsp;<font size=2em color='#C0C0C0'>"; // Grey
-            }
-
-            if (price === priceChange) {
-                priceChangeHtml += "0" + "%</font>";
-            } else if ((price - priceChange) !== 0) { // Avoid division by zero
-                priceChangeHtml += FormatNumber(priceChange / (price - priceChange) * 100, "+0.00;-0.00;0.00") + "%</font>";
-            } else {
-                priceChangeHtml += "N/A%</font>"; // Indicate division by zero if prices are identical but non-zero
-            }
-        }
-
-        // VBA: If datax = "" Or datay1 = "" Or datay2 = "" Or datay3 = "" Then Else
-        // Check if chart data was successfully generated for this row
-        if (dateLabels.length > 0 && lossData.length > 0 && trajectoryData.length > 0 && priceData.length > 0) {
-            // Reverse the arrays to match VBA's string concatenation order for chart data
-            rowJsData += `
-                date:[${dateLabels.reverse().join(",")}],
-                loss:[${lossData.reverse().join(",")}],
-                traj:[${trajectoryData.reverse().join(",")}],
-                price:[${priceData.reverse().join(",")}],
-            },`;
-            jsDataContent += `\n${rowJsData}`;
-        }
+  if (highlightItem == null) {
+    data.forEach(d => {
+      d.opacity = (matchesSector(d) && matchesPredErr(d)) ? 1 : lo_opacity;
+    });
+    if ((showCategory === 'Show all' || showCategory === 'Show All') && PredErrThreshold === null) {
+      data.forEach(d => d.opacity = 1); // both filters are "show all"
     }
-    jsDataContent += `\n];`;
+  } else {
+    data.forEach(d => {
+      const isMatch = matchesSector(d) && matchesPredErr(d);
+      if (d.symbol == highlightItem) {
+        d.opacity = 1;
+      } else {
+        d.opacity = isMatch ? mid_opacity : lo_opacity;
+      }
+    });
+  }
+}
+createCategoryButtons(document.getElementById('category-container'), viewcategories, categorycolors, categoryfontcolors, 'sector-option');
 
-    // Reconstruct the full HTML content based on the commented VBA parts
-    const HTMLprefix = "<!DOCTYPE html><head><meta http-equiv='Content-Type' content='text/html; charset=UTF-8'><title>Top stocks</title><style>* { font-family: Arial, sans-serif;}#chart { width: 800px; height: 600px;}#tooltip { position: absolute; background: white; border: 1px solid gray; border-radius: 5px; padding: 10px; opacity: 0.0; transition: opacity 0.2s;} " +
-".tooltip { border-collapse: collapse; width: 100%;}.tooltip th, .tooltip td { border: 1px solid #c0c0c0; padding: 8px; text-align: left;}.datatable th { background-color: #f2f2f2;}.datatable { border-collapse: collapse; width: 100%;}.datatable th, .datatable td { border: 1px solid #c0c0c0; padding: 8px; text-align: left;} " +
-".datatable th { background-color: #f2f2f2;}.datatable tr:hover { background-color: #f0f0f0; }.hidden { display: none;}a:hover {color: red;}a { color: black; text-decoration: none;}.category-container-class input[type='radio'] { display: none;}.category-button { display: block; padding: 2px 10px; border: 1px solid #ccc; cursor: pointer; border-radius: 5px; " +
-" width: 160px; font-weight: normal; opacity: 0.5; margin-top: 5px;}.category-button.checked { border: 2px solid #000; font-weight: bold; opacity: 1;}</style></head>" +
-"<body> <table width=100% class='layout'><TR> <TD colspan=2> <FONT SIZE='+2'>Top stocks <A onclick='showHelpInfo(event)' onmouseover='showHelpInfo(event)'>&#9432;</FONT></A><BR> </TD></TR> <TR> <TD width=85% align=middle><div id='chart'></div></TD> <TD valign=top width=15%><B>Sector</B><div id='category-container' class='category-container-class'></div></TD></TR>" +
-"<TR><TD colspan=2><div id='table-container'></div></TD></TR> </TABLE> <div id='tooltip'></div><script src='https://d3js.org/d3.v7.min.js'></script><script>let highlightItem = null;let filterItem = '';let lo_opacity = 0.05;let mid_opacity = 0.2;let showCategory = 'Show all';let svg;";
-    const HTMLsuffix1 = "data.forEach(d=>{if (d.sector.endsWith('Basic Materials')) {d.color='#FFECD1';} else if (d.sector.endsWith('Communication Services')) {d.color='#F00000';} else if (d.sector.endsWith('Consumer Cyclical')) {d.color='#0080FF';} else if (d.sector.endsWith('Consumer Defensive')) {d.color='#80FF00';} else if (d.sector.endsWith('Energy')) {d.color='#C0C000';} else if (d.sector.endsWith('Financial Services')) {d.color='#00FF00';} else if (d.sector.endsWith('Healthcare')) {d.color='#008000';} else if (d.sector.endsWith('Industrials')) {d.color='#C0C0C0';} else if (d.sector.endsWith('Real Estate')) {d.color='#800080';} else if (d.sector.endsWith('Technology')) {d.color='#0000FF';} else if (d.sector.endsWith('Utilities')) {d.color='#808080';} else {d.color='#000000';}" +
-"d.outlinecolor='#000000'; d.opacity=1;}); const width=800; const height=600; svg=d3.select('#chart') .append('svg') .attr('width',width) .attr('height',height); const viewcategories=['Show all','Basic Materials','Communication Services','Consumer Cyclical','Consumer Defensive','Energy','Financial Services','Healthcare','Industrials','Real Estate','Technology','Utilities','Others']; const categorycolors=['#ffffff','#FFECD1','#F00000','#0080FF','#80FF00','#C0C000','#00FF00','#008000','#C0C0C0','#800080','#0000FF','#808080','#000000']; const categoryfontcolors=['#000','#000','#fff','#fff','#000','#fff','#000','#fff','#000','#fff','#fff','#fff','#fff'];" +
-"function createCategoryButtons(container,options,optioncolors,optionfontcolors) {options.forEach((option,index)=>{const input=document.createElement('input'); input.type='radio'; input.name='option'; input.value=option; input.checked=(index==0); input.id=`option-${index}`; const label=document.createElement('label'); label.htmlFor=`option-${index}`; label.innerHTML=option; label.value=option; label.style.color=optionfontcolors[index]; label.style.backgroundColor=categorycolors[index]; label.classList.add('category-button'); if (index==0) label.classList.add('checked'); container.appendChild(input); container.appendChild(label);}); const categoryButtons=document.querySelectorAll('.category-button'); categoryButtons.forEach(button=>{button.addEventListener('click',()=>{categoryButtons.forEach(btn=>btn.classList.remove('checked')); button.classList.add('checked');});});}" +
-"function changeCategory() {const button=document.querySelector('input[name=\'option\']:checked'); const selectedOption=button.value; if (showCategory == selectedOption) {showCategory='Show all'; const categoryButtons=document.querySelectorAll('.category-button'); categoryButtons.forEach(button=>{button.classList.remove('checked'); if (button.value=='Show all') button.classList.add('checked');});} else {showCategory=selectedOption;} highlightItem=null; hideTooltip(); updateOpacity(); updateGraphics(); sortTable('datatable',0,true);} function updateOpacity() {if (highlightItem==null) {if (showCategory=='Show all') {data.forEach(d=>{d.opacity=1;});} else {data.forEach(d=>{d.opacity=( d.sector.endsWith(showCategory)?1:lo_opacity );});}} else " +
-"{if (showCategory=='Show all') {data.forEach(d=>{d.opacity=(d.name == highlightItem?1:lo_opacity);});} else {data.forEach(d=>{d.opacity=(d.name == highlightItem?1:( d.sector.endsWith(showCategory)?mid_opacity:lo_opacity));});}}} createCategoryButtons(document.getElementById('category-container'),viewcategories,categorycolors,categoryfontcolors); const radioButtons=document.querySelectorAll('input[name=\'option\']'); radioButtons.forEach(radioButton=>{radioButton.addEventListener('click',changeCategory);}); function updateGraphics() {updateBubbleChart(); updateTable(); if (filterItem!='') filterTable('datatable');}" +
-"function updateBubbleChart() {const xExtent=[0,d3.max(data,d=>d.change )]; const yExtent=[d3.min(data,d=>d.drop ),0]; const xScale=d3.scaleLinear() .domain(xExtent) .range([100,width - 100]); const yScale=d3.scaleLinear() .domain(yExtent) .range([height - 50,50]); const radiusScale=d3.scaleSqrt() .domain(d3.extent(data,d=>d.mktcap)) .range([2,20]); svg.selectAll('*').remove(); if (true) {const textData=[ {x: (xExtent[0]+xExtent[1]) / 2,y: yExtent[1],text: 'Expected annual growth (%)',anchorpos: 'middle',angle: 0,dx: '0',dy: '-20'},{x: xExtent[0],y: (yExtent[0]+yExtent[1]) / 2,text: 'Drop from 52-wk high (%)',anchorpos: 'middle',angle: -90,dx: '0',dy: '-40'},];" +
-"svg.selectAll('text') .data(textData) .enter() .append('text') .attr('transform',d=>'rotate('+d.angle+' '+xScale(d.x)+' '+yScale(d.y)+')') .attr('x',d=>xScale(d.x)) .attr('y',d=>yScale(d.y)) .text(d=>d.text) .attr('fill','black') .attr('text-anchor',d=>d.anchorpos) .attr('dx',d=>d.dx) .attr('dy',d=>d.dy) .style('font-weight','bold');} if (true) {svg.append('g') .attr('class','x-axis') .attr('transform','translate(0,50)') .call(d3.axisBottom(xScale)); svg.append('g') .attr('class','y-axis') .attr('transform','translate(100,0)') .call(d3.axisLeft(yScale));} if (showCategory == 'Show all') {data_filtered=data.filter(d=>d.opacity != 1); " +
-"bubbles=svg.selectAll('circle') .data(data_filtered ) .enter() .append('circle') .on('click' ,pickItem ) .attr('cx',d=>xScale(d.change)) .attr('cy',d=>yScale(d.drop)) .attr('r',d=>radiusScale(d.mktcap)) .attr('opacity',d=>d.opacity) .attr('fill',d=>d.color) .attr('stroke',d=>(d.opacity==1?'grey':'none')) .attr('stroke-width',1); data_filtered=data.filter(d=>d.opacity == 1);" +
-"bubbles=svg.selectAll('circle1') .data(data_filtered ) .enter() .append('circle') .on('mouseover',showTooltip ) .on('mousemove',showTooltip ) .on('click' ,pickItem ) .on('mouseout' ,hideTooltip ) .attr('cx',d=>xScale(d.change)) .attr('cy',d=>yScale(d.drop)) .attr('r',d=>radiusScale(d.mktcap)) .attr('opacity',d=>d.opacity) .attr('fill',d=>d.color) .attr('stroke',d=>(d.opacity==1?'grey':'none')) .attr('stroke-width',1);} else {data_filtered=data.filter(d=>d.opacity != 1 && d.sector.endsWith(showCategory)==false); " +
-"bubbles=svg.selectAll('circle') .data(data_filtered ) .enter() .append('circle') .attr('cx',d=>xScale(d.change)) .attr('cy',d=>yScale(d.drop)) .attr('r',d=>radiusScale(d.mktcap)) .attr('opacity',d=>d.opacity) .attr('fill',d=>d.color) .attr('stroke','none') .attr('stroke-width',1); data_filtered=data.filter(d=>d.opacity != 1 && d.sector.endsWith(showCategory)); " +
-"bubbles=svg.selectAll('circle1') .data(data_filtered ) .enter() .append('circle') .on('click' ,pickItem ) .attr('cx',d=>xScale(d.change)) .attr('cy',d=>yScale(d.drop)) .attr('r',d=>radiusScale(d.mktcap)) .attr('opacity',d=>d.opacity) .attr('fill',d=>d.color) .attr('stroke','none') .attr('stroke-width',1); data_filtered=data.filter(d=>d.opacity == 1); bubbles=svg.selectAll('circle2') .data(data_filtered ) .enter() .append('circle') .on('mouseover',showTooltip ) .on('mousemove',showTooltip ) .on('click' ,pickItem ) .on('mouseout' ,hideTooltip ) .attr('cx',d=>xScale(d.change)) .attr('cy',d=>yScale(d.drop)) .attr('r',d=>radiusScale(d.mktcap)) .attr('opacity',d=>d.opacity) .attr('fill',d=>d.color) .attr('stroke','grey') .attr('stroke-width',1);} svg.on('click',clickChart );} " +
-"function updateTable(){const container=document.getElementById('table-container'); const table=document.createElement('table'); table.className='datatable'; table.id='datatable'; const thead=document.createElement('thead'); const headerRow=document.createElement('tr'); const columns=['Rank','Company','Sector','Market Cap','Expected annual growth','Drop from 52-wk high']; const columnwidth=['5%','50%','20%','5%','10%','10%']; " +
-"columns.forEach((column,index)=>{const th=document.createElement('th'); th.dataset.index=index; th.innerHTML=column+(index==1?'&nbsp;&nbsp;'+'<input type=\'text\' id=\'filterName\' placeholder=\'Filter by name\' value=\''+filterItem+'\'>'+'<button id=\'filterNameCancel\'>X</button>':'')+'<BR>'+'<A onclick=\'sortTable(\"datatable\",'+index+',true )\'>&#9650;</A>'+'<A onclick=\'sortTable(\"datatable\",'+index+',false)\'>&#9660;</A>'; " +
-"th.style.width=columnwidth[index]; headerRow.appendChild(th);}); thead.appendChild(headerRow); table.appendChild(thead); if (true) {const tbody=document.createElement('tbody'); data.forEach(d=>{if (d.opacity!=lo_opacity) {const tr=document.createElement('tr'); td=document.createElement('td'); td.textContent=d.rank; if (d.opacity==mid_opacity) td.style.color='#A0A0A0'; tr.appendChild(td); td=document.createElement('td'); td.textContent=d.name; if (d.opacity==mid_opacity) td.style.color='#A0A0A0'; tr.appendChild(td);" +
-"td=document.createElement('td'); td.textContent=d.sector; if (d.opacity==mid_opacity) td.style.color='#A0A0A0'; tr.appendChild(td); td=document.createElement('td'); td.textContent=(d.mktcap>1000000000000?(d.mktcap/1000000000000).toFixed(1)+'T':(d.mktcap>1000000000?(d.mktcap/1000000000).toFixed(1)+'B':(d.mktcap>1000000?(d.mktcap/1000000).toFixed(1)+'M':d.mktcap.toFixed(0))) ); if (d.opacity==mid_opacity) td.style.color='#A0A0A0'; tr.appendChild(td); td=document.createElement('td'); td.textContent=d.change.toFixed(1)+'%'; " +
-"if (d.opacity==mid_opacity) td.style.color='#A0A0A0'; tr.appendChild(td); td=document.createElement('td'); td.textContent=d.drop.toFixed(1)+'%'; if (d.opacity==mid_opacity) td.style.color='#A0A0A0'; tr.appendChild(td); tbody.appendChild(tr);}}); table.appendChild(tbody);} container.innerHTML=''; container.appendChild(table);" +
-"table.addEventListener('click',(event)=>{const target=event.target; if (target.tagName === 'TD') {const row=target.parentNode; const firstCell=row.cells[1]; const content=firstCell.textContent; if (highlightItem == content) {highlightItem=null;} else {highlightItem=content;} updateOpacity(); updateGraphics();}}); " +
-"document.getElementById('filterName').addEventListener('keyup',function () {filterTable('datatable');}); document.getElementById('filterNameCancel').addEventListener('click',function() {document.getElementById('filterName').value=''; filterTable('datatable');}); return table;} " +
-"function filterTable(tableid) {const table=document.getElementById(tableid); const tbody=table.querySelector('tbody'); const filterInput=document.getElementById('filterName'); filterItem=filterInput.value; const filterValue=filterItem.toLowerCase(); const rows=tbody.getElementsByTagName('tr'); for (let i=0; i<rows.length; i++) {const nameCell=rows[i].getElementsByTagName('td')[1]; const name=nameCell.textContent.toLowerCase(); if (name.includes(filterValue)) {rows[i].style.display='';} else {rows[i].style.display='none';}}}" +
-"function sortTable(tableid,columnIndex,ascending=true) {const table=document.getElementById(tableid); const tbody=table.querySelector('tbody'); const rows=Array.from(tbody.querySelectorAll('tr')); if (columnIndex==0 || columnIndex==4 || columnIndex==5) {rows.sort((a,b)=>{const cellA=parseInt(a.cells[columnIndex].textContent); const cellB=parseInt(b.cells[columnIndex].textContent); if (ascending) {return (cellA<cellB?-1:(cellA>cellB?1:0))} else {return (cellA<cellB?1:(cellA>cellB?-1:0))}});} else " +
-"if (columnIndex==3) {rows.sort((a,b)=>{const strA=a.cells[columnIndex].textContent; const strB=b.cells[columnIndex].textContent; const cellA=(strA.charAt(strA.length-1)=='T'?parseInt(strA.slice(0,-1))*1000000000000:(strA.charAt(strA.length-1)=='B'?parseInt(strA.slice(0,-1))*1000000000:(strA.charAt(strA.length-1)=='M'?parseInt(strA.slice(0,-1))*1000000:parseInt(strA) ))); const cellB=(strB.charAt(strB.length-1)=='T'?parseInt(strB.slice(0,-1))*1000000000000:(strB.charAt(strB.length-1)=='B'?parseInt(strB.slice(0,-1))*1000000000:(strB.charAt(strB.length-1)=='M'?parseInt(strB.slice(0,-1))*1000000:parseInt(strB) )));" +
-"if (ascending) {return (cellA<cellB?-1:(cellA>cellB?1:0))} else {return (cellA<cellB?1:(cellA>cellB?-1:0))}});} else {rows.sort((a,b)=>{const cellA=a.cells[columnIndex].textContent; const cellB=b.cells[columnIndex].textContent; const compare=cellA.localeCompare(cellB); return ascending?compare:-compare;});} tbody.innerHTML=''; rows.forEach(row=>tbody.appendChild(row)); const th=document.querySelector(`th[data-index='${columnIndex}']`); th.dataset.sorted=ascending?'desc':'asc';} " +
-"function showTooltip(event,d) {const tooltip=d3.select('#tooltip'); if (d.opacity==1) {const mktcaptxt=(d.mktcap>1000000000000?(d.mktcap/1000000000000).toFixed(1)+'T':(d.mktcap>1000000000?(d.mktcap/1000000000).toFixed(1)+'B':(d.mktcap>1000000?(d.mktcap/1000000).toFixed(1)+'M':d.mktcap.toFixed(0))) ); " +
-"const quotedArray=[]; for (let i=0; i<d.date.length; i++) {quotedArray.push(`'${d.date[i]}'`);} const imgsrctxt=`https://quickchart.io/chart?w=120&h=100&c={type:'line',options:{legend:false,title:{display:false},scales:{yAxes:[{ticks:{fontSize:8,stepSize:20}}],xAxes:[{display:true,ticks:{fontSize:8,autoSkip:true}}]},plugins:{tickFormat:{suffix:'%'}}},data:{labels:[${quotedArray}],datasets:[{data:[${d.loss}],fill:false,borderColor:'%23c00000',borderDash:[1,1],borderWidth:1,pointRadius:0},{data:[${d.traj}],fill:false,borderColor:'blue',borderDash:[3,3],borderWidth:0.5,pointRadius:0},{data:[${d.price}],fill:false,borderColor:'blue',borderWidth:1,pointRadius:0}]}}`; tooltip.html(`<TABLE class=tooltip><TR><TD COLSPAN=2>${d.rank}. <strong>${d.name}</strong></TD></TR><TR><TD COLSPAN=2>" +
-"<FONT COLOR=#808080>${d.sector}</FONT></TD></TR><TR><TD>Expected annual growth</TD><TD>${d.change}%</TD></TR><TR><TD>10%-ile drop from 52wk high</TD><TD>${d.drop}%</TD></TR><TR><TD>Market cap</TD><TD>${mktcaptxt}</TD></TR><TR><TD colspan=2><img src=\"${imgsrctxt}\"></TD></TR></TABLE>`)";
-    const HTMLsuffix2 = ".style('left',(event.pageX+10)+'px') .style('top',(event.pageY - 20)+'px') .style('display',null) .style('opacity',1);}} function showHelpInfo(event) {const tooltip=d3.select('#tooltip'); tooltip.html('This analysis identifies stocks with steady growth trends,using:'+'<LI>a conservative approach to identify consistent growth</LI>'+'<LI>a 10th percentile threadhold to assess potential loss from 52-wk highs due to poor timing</LI>' ) .style('left',(event.pageX)+'px') .style('top',(event.pageY)+'px') .style('display',null) .style('opacity',1) .on('mouseleave' ,hideTooltip);} function pickItem(event,d) {showTooltip(event,d); if (highlightItem==null) {highlightItem=d.name;} else if (highlightItem==d.name) {highlightItem=null;} else if (d.sector.endsWith(showCategory) || showCategory=='Show all') {highlightItem=d.name;} updateOpacity(); updateGraphics();} " +
-  "function clickChart(event,d) {if (event.target.tagName == 'circle') {pickItem(event,d);} else {highlightItem=null; hideTooltip(); updateOpacity(); updateGraphics();}} function debugmessage(testmessage) {const tooltip=d3.select('#tooltip'); tooltip.html('MESSAGE: '+testmessage) .style('left',(10)+'px') .style('top',(20)+'px') .transition().duration(0).style('display',null) .transition().duration(0).style('opacity',1);} function hideTooltip() {d3.select('#tooltip') .style('opacity',0) .style('display','none');} updateGraphics(); sortTable('datatable',0,true); </script></body></html>";
-       
-    writeTxt("./topstocks.js", jsDataContent);
-    //writeTxt("./topstocks.html", fullHtmlContent);
+const PredErrOptions = ['Show All', '5% or less', '10% or less', '20% or less'];
+const PredErrColors = ['#ffffff','#ffffff','#ffffff','#ffffff'];
+const PredErrFontColors = ['#000','#000','#000','#000'];
+createCategoryButtons(document.getElementById('prederr-container'), PredErrOptions, PredErrColors, PredErrFontColors, 'prederr-option');
 
-    if (true) {
-        const outputfilename = 'topstocks.js';
-        process.stdout.write(`\r                                                                           `); // Clear the line
-        process.stdout.write(`\rUploading ${outputfilename} to GitHub...`);
+const sectorRadioButtons = document.querySelectorAll("input[name='sector-option']");
+sectorRadioButtons.forEach(radioButton => {
+  radioButton.addEventListener('click', changeCategory);
+});
+const PredErrRadioButtons = document.querySelectorAll("input[name='prederr-option']");
+PredErrRadioButtons.forEach(radioButton => {
+  radioButton.addEventListener('click', changePredErr);
+});
 
-        // Upload the generated JavaScript data file to topstocks.js
-        const uploadToGitHub = require("../lib/github.js").uploadToGitHub;
-        const jsUploadResult = await uploadToGitHub("jeffreytsaoprivate/stocks", outputfilename, jsDataContent);
-        if (jsUploadResult) {
-            console.error(`Failed to upload topstocks.js: ${jsUploadResult}`);
-            return; // Exit if JS file upload fails
-        }
 
-        // Upload the generated HTML page to topstocks.html
-        //const fullHtmlContent = HTMLprefix + '\n' + jsDataContent + '\n' + HTMLsuffix1 + HTMLsuffix2;
-        //const htmlUploadResult = await uploadToGitHub("jeffreytsaoprivate/stocks", "topstocks.html", fullHtmlContent);
-        //if (htmlUploadResult) {
-        //    console.error(`Failed to upload topstocks.html: ${htmlUploadResult}`);
-        //    return; // Exit if HTML file upload fails
-        //}
-
-        console.log(" Done.");
-    }
+function updateGraphics() {
+  updateBubbleChart();
+  updateTable();
+  if (filterItem != '') filterTable('datatable');
 }
 
-async function findNewStockSymbols() {
-    NewStockSymbolURL = [
-	'http://docs.google.com/document/export?format=txt&id=1WrUoZEQjVIWNs3X7J4w9zVWwzFWhfnkSgVnJBakh5-o', 
-	'C:\\Users\\jtsao\\OneDrive\\Documents\\Jeff\\javascript\\stocks\\stockadd.txt',
-    ];
-    StockSymbols = [];
-    for (let n = 0; n <= NewStockSymbolURL.length; n++) { // LBound to UBound maps to 0 to length-1
-        NumStockSymbolsPrevious = StockSymbols.length;
-        if (n<NewStockSymbolURL.length) {
-	        let currentUrl = NewStockSymbolURL[n];
-            process.stdout.write(`Reading from ${currentUrl}`);
-            if (currentUrl.toLowerCase().startsWith("http")) {
-                tmpdata = await readURL(currentUrl, 0);
-                tmpdata = (tmpdata.status === "success" ? tmpdata.data:"");
-            } else {
-                if (await fileExists(currentUrl)) {
-                    tmpdata = await readTxt(currentUrl);
-                }
-            }
-        } else {
-    	    topmovers = await getTopMovers();
-            for(let i=0; i<topmovers.length; i++) {
-               if (i==0) {
-                  tmpdata = topmovers[i].symbol;
-               } else {
-                  tmpdata += "\n" + topmovers[i].symbol;
-               }
-            }
-            //process.stdout.write(`\rReading from top movers`);
-        }
+function updateBubbleChart() {
+  const MaxAnnualGrowthFold = 5;
+  //const xExtent = [Math.log10(Math.max(d3.min(data, d => d.change)/100+1,0.00001)), Math.log10(d3.max(data, d => d.change)/100 + 1)];
+  const xExtent = [0, d3.max(data, d => Math.min(d.change, MaxAnnualGrowthFold*100))];
+  const yExtent = [d3.min(data, d => d.drop), 0];
+  const xScale = d3.scaleLinear().domain(xExtent).range([100, width - 100]);
+  const yScale = d3.scaleLinear().domain(yExtent).range([height - 50, 50]);
+  const radiusScale = d3.scaleSqrt().domain(d3.extent(data, d => d.mktcap)).range([2, 20]);
+  svg.selectAll('*').remove();
+  if (true) {
+    const textData = [{
+      x: (xExtent[0] + xExtent[1]) / 2,
+      y: yExtent[1],
+      text: 'Expected annual growth (%)',
+      anchorpos: 'middle',
+      angle: 0,
+      dx: '0',
+      dy: '-20'
+    }, {
+      x: xExtent[0],
+      y: (yExtent[0] + yExtent[1]) / 2,
+      text: 'Drop from 52-wk high (%)',
+      anchorpos: 'middle',
+      angle: -90,
+      dx: '0',
+      dy: '-40'
+    }, ];
+    svg.selectAll('text').data(textData).enter().append('text').attr('transform', d => 'rotate(' + d.angle + ' ' + xScale(d.x) + ' ' + yScale(d.y) + ')').attr('x', d => xScale(d.x)).attr('y', d => yScale(d.y)).text(d => d.text).attr('fill', 'black').attr('text-anchor', d => d.anchorpos).attr('dx', d => d.dx).attr('dy', d => d.dy).style('font-weight', 'bold');
+  }
+  if (true) {
+    svg.append('g').attr('class', 'x-axis').attr('transform', 'translate(0,50)').call(d3.axisBottom(xScale));
+    svg.append('g').attr('class', 'y-axis').attr('transform', 'translate(100,0)').call(d3.axisLeft(yScale));
+  }
 
-        if (tmpdata !== "") {
-            const lines = tmpdata.replace(/\r/g, "").split(/\n/); // Replace all CR, then split by LF
-            for (let m = 0; m < lines.length; m++) { // LBound to UBound maps to 0 to length-1
-                let line = lines[m];
-                if (line !== "" && line !== "ï»¿") {
-                    const processedSymbol = line.trim().toUpperCase();
-                    if (processedSymbol.endsWith('/') || processedSymbol.endsWith('\\')) {
-                        // Remove trailing / or \
-                        StockSymbols.push(processedSymbol.slice(0, -1));
-                    } else {
-                        StockSymbols.push(processedSymbol);
-                    }
-                }
-            }
-        }
-        if (n<NewStockSymbolURL.length) console.log(`: ${StockSymbols.length - NumStockSymbolsPrevious} symbols`);
-
+  {
+    const selectedData = data.filter(d => d.opacity==1);
+    if (selectedData.length == 1) {
+        const item = selectedData[0];
+        var line = d3.line().x((d, j) => xScale(Math.min(item.AllRobustChange[j],MaxAnnualGrowthFold*100))).y((d, j) => yScale(item.AllWorstDrop[j]));
+        svg.append('path').datum(d3.range(item.datevalue.length)).attr('d', line).attr("fill", "none").attr("stroke", "gray").attr("stroke-width", 1).attr("stroke-dasharray", "1,1");
     }
-    return StockSymbols;
+  }
+
+  if (showCategory == 'Show all') {
+    //---------Add all circles ------------------------------
+    data_filtered = data.filter(d => d.opacity != 1);
+    bubbles = svg.selectAll('circle').data(data_filtered).enter().append('circle').on('click', pickItem).attr('cx', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100))).attr('cy', d => yScale(d.drop)).attr('r', d => radiusScale(d.mktcap)).attr('opacity', d => d.opacity).attr('fill', d => d.color).attr('stroke', d => (d.opacity == 1 ? 'grey' : 'none')).attr('stroke-width', 1);
+    data_filtered = data.filter(d => d.opacity == 1);
+    bubbles = svg.selectAll('circle1').data(data_filtered).enter().append('circle').on('mouseover', showTooltip).on('mousemove', showTooltip).on('click', pickItem).on('mouseout', hideTooltip).attr('cx', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100))).attr('cy', d => yScale(d.drop)).attr('r', d => radiusScale(d.mktcap)).attr('opacity', d => d.opacity).attr('fill', d => d.color).attr('stroke', d => (d.opacity == 1 ? 'grey' : 'none')).attr('stroke-width', 1);
+
+    //---------Add labels for top 10 ---------------
+    const top10Data = data.filter(d => d.rank >= 1 && d.rank <= 10 && d.opacity === 1); // Only show labels for fully opaque (selected or 'Show all') items
+    svg.selectAll('.rank-label')
+        .data(top10Data).enter().append('text')
+        .attr('class', 'rank-label') // Add a class for specific styling/selection if needed
+        .attr('x', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100)) + radiusScale(d.mktcap)+5) // Position label to the right of the bubble
+        .attr('y', d => yScale(d.drop) + 5) // Adjust vertical position for better alignment
+        .text(d => d.rank)
+        .attr('fill', 'grey')
+        .attr('font-size', '12px') // Adjust font size as needed
+        .attr('font-weight', 'normal')
+        .attr('text-anchor', 'start'); // Align text to the start (left)
+  } else {
+    data_filtered = data.filter(d => d.opacity != 1 && d.sector.startsWith(showCategory) == false);
+    bubbles = svg.selectAll('circle').data(data_filtered).enter().append('circle').attr('cx', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100))).attr('cy', d => yScale(d.drop)).attr('r', d => radiusScale(d.mktcap)).attr('opacity', d => d.opacity).attr('fill', d => d.color).attr('stroke', 'none').attr('stroke-width', 1);
+    data_filtered = data.filter(d => d.opacity != 1 && d.sector.startsWith(showCategory));
+    bubbles = svg.selectAll('circle1').data(data_filtered).enter().append('circle').on('click', pickItem).attr('cx', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100))).attr('cy', d => yScale(d.drop)).attr('r', d => radiusScale(d.mktcap)).attr('opacity', d => d.opacity).attr('fill', d => d.color).attr('stroke', 'none').attr('stroke-width', 1);
+    data_filtered = data.filter(d => d.opacity == 1);
+    bubbles = svg.selectAll('circle2').data(data_filtered).enter().append('circle').on('mouseover', showTooltip).on('mousemove', showTooltip).on('click', pickItem).on('mouseout', hideTooltip).attr('cx', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100))).attr('cy', d => yScale(d.drop)).attr('r', d => radiusScale(d.mktcap)).attr('opacity', d => d.opacity).attr('fill', d => d.color).attr('stroke', 'grey').attr('stroke-width', 1);
+
+    //---------Add labels for top 10 ---------------
+    const top10Data = data.filter(d => d.rank >= 1 && d.rank <= 10 && d.opacity === 1 && d.sector.startsWith(showCategory)); // Only show labels for fully opaque (selected or 'Show all') items
+    svg.selectAll('.rank-label')
+        .data(top10Data).enter().append('text')
+        .attr('class', 'rank-label') // Add a class for specific styling/selection if needed
+        .attr('x', d => xScale(Math.min(d.change,MaxAnnualGrowthFold*100)) + radiusScale(d.mktcap)+5) // Position label to the right of the bubble
+        .attr('y', d => yScale(d.drop) + 5) // Adjust vertical position for better alignment
+        .text(d => d.rank)
+        .attr('fill', 'grey')
+        .attr('font-size', '12px') // Adjust font size as needed
+        .attr('font-weight', 'normal')
+        .attr('text-anchor', 'start'); // Align text to the start (left)
+  }
+  svg.on('click', clickChart);
 }
+
+function updateTable() {
+  const container = document.getElementById('table-container');
+  const table = document.createElement('table');
+  table.className = 'datatable';
+  table.id = 'datatable';
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  const columns = ['Rank', 'Symbol', 'Company', 'Sector', 'Market Cap', 'Expected annual growth', 'Drop from 52-wk high'];
+  const columnwidth = ['5%', '10%', '30%', '30%', '5%', '10%', '10%'];
+  columns.forEach((column, index) => {
+    const th = document.createElement('th');
+    th.dataset.index = index;
+    th.innerHTML = column + (index == 2 ? '&nbsp;&nbsp;' + '<input type=\'text\' id=\'filterName\' placeholder=\'Filter by name\' value=\'' + filterItem + '\'>' + '<button id=\'filterNameCancel\'>X</button>' : '') + '<BR>' + '<A onclick=\'sortTable(\"datatable\",' + index + ',true )\'>&#9650;</A>' + '<A onclick=\'sortTable(\"datatable\",' + index + ',false)\'>&#9660;</A>';
+    th.style.width = columnwidth[index];
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+  if (true) {
+    const tbody = document.createElement('tbody');
+    data.forEach(d => {
+      if (d.opacity != lo_opacity) {
+        const tr = document.createElement('tr');
+        td = document.createElement('td');
+        td.textContent = d.rank;
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);
+        td = document.createElement('td');
+        td.textContent = d.symbol;
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);        
+        td = document.createElement('td');
+        td.textContent = d.name;
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);
+        td = document.createElement('td');
+        td.textContent = d.sector;
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);
+        td = document.createElement('td');
+        td.textContent = (d.mktcap > 1000000000000 ? (d.mktcap / 1000000000000).toFixed(1) + 'T' : (d.mktcap > 1000000000 ? (d.mktcap / 1000000000).toFixed(1) + 'B' : (d.mktcap > 1000000 ? (d.mktcap / 1000000).toFixed(1) + 'M' : d.mktcap.toFixed(0))));
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);
+        td = document.createElement('td');
+        td.textContent = d.change.toFixed(1) + '%';
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);
+        td = document.createElement('td');
+        td.textContent = d.drop.toFixed(1) + '%';
+        if (d.opacity == mid_opacity) td.style.color = '#A0A0A0';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+    });
+    table.appendChild(tbody);
+  }
+  container.innerHTML = '';
+  container.appendChild(table);
+  table.addEventListener('click', (event) => {
+    const target = event.target;
+    if (target.tagName === 'TD') {
+      const row = target.parentNode;
+      const firstCell = row.cells[1]; // symbol      
+      const content = firstCell.textContent;
+      if (highlightItem == content) {
+        highlightItem = null;
+      } else {
+        highlightItem = content;
+      }
+      updateOpacity();
+      updateGraphics();
+    }
+  });
+  document.getElementById('filterName').addEventListener('keyup', function() {
+    filterTable('datatable');
+  });
+  document.getElementById('filterNameCancel').addEventListener('click', function() {
+    document.getElementById('filterName').value = '';
+    filterTable('datatable');
+  });
+  return table;
+}
+
+function filterTable(tableid) {
+  const table = document.getElementById(tableid);
+  const tbody = table.querySelector('tbody');
+  const filterInput = document.getElementById('filterName');
+  filterItem = filterInput.value;
+  const filterValue = filterItem.toLowerCase();
+  const rows = tbody.getElementsByTagName('tr');
+  var NumSelected=0;
+  var LastChosen=-1;
+
+  for (let i = 0; i < rows.length; i++) {
+    const nameCell = rows[i].getElementsByTagName('td')[1];
+    const name = nameCell.textContent.toLowerCase();
+    if (name.includes(filterValue)) {
+      rows[i].style.display = '';
+      NumSelected=NumSelected+1;
+      LastChosen = i;
+    } else {
+      rows[i].style.display = 'none';
+    }
+  }
+  if (NumSelected==1) {
+    highlightItem = rows[LastChosen].getElementsByTagName('td')[1].textContent; // symbol
+  } else {
+    highlightItem = null;
+  }
+  updateOpacity();
+  updateBubbleChart();
+}
+
+function sortTable(tableid, columnIndex, ascending = true) {
+  const table = document.getElementById(tableid);
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  if (columnIndex == 0 || columnIndex == 4 || columnIndex == 5) {
+    rows.sort((a, b) => {
+      const cellA = parseInt(a.cells[columnIndex].textContent);
+      const cellB = parseInt(b.cells[columnIndex].textContent);
+      if (ascending) {
+        return (cellA < cellB ? -1 : (cellA > cellB ? 1 : 0))
+      } else {
+        return (cellA < cellB ? 1 : (cellA > cellB ? -1 : 0))
+      }
+    });
+  } else if (columnIndex == 3) {
+    rows.sort((a, b) => {
+      const strA = a.cells[columnIndex].textContent;
+      const strB = b.cells[columnIndex].textContent;
+      const cellA = (strA.charAt(strA.length - 1) == 'T' ? parseInt(strA.slice(0, -1)) * 1000000000000 : (strA.charAt(strA.length - 1) == 'B' ? parseInt(strA.slice(0, -1)) * 1000000000 : (strA.charAt(strA.length - 1) == 'M' ? parseInt(strA.slice(0, -1)) * 1000000 : parseInt(strA))));
+      const cellB = (strB.charAt(strB.length - 1) == 'T' ? parseInt(strB.slice(0, -1)) * 1000000000000 : (strB.charAt(strB.length - 1) == 'B' ? parseInt(strB.slice(0, -1)) * 1000000000 : (strB.charAt(strB.length - 1) == 'M' ? parseInt(strB.slice(0, -1)) * 1000000 : parseInt(strB))));
+      if (ascending) {
+        return (cellA < cellB ? -1 : (cellA > cellB ? 1 : 0))
+      } else {
+        return (cellA < cellB ? 1 : (cellA > cellB ? -1 : 0))
+      }
+    });
+  } else {
+    rows.sort((a, b) => {
+      const cellA = a.cells[columnIndex].textContent;
+      const cellB = b.cells[columnIndex].textContent;
+      const compare = cellA.localeCompare(cellB);
+      return ascending ? compare : -compare;
+    });
+  }
+  tbody.innerHTML = '';
+  rows.forEach(row => tbody.appendChild(row));
+  const th = document.querySelector(`th[data-index='${columnIndex}']`);
+  th.dataset.sorted = ascending ? 'desc' : 'asc';
+}
+
+function showTooltip(event, d) {
+  const tooltip = d3.select('#tooltip');
+  if (d.opacity == 1) {
+    const mktcaptxt = (d.mktcap > 1000000000000 ? (d.mktcap / 1000000000000).toFixed(1) + 'T' : (d.mktcap > 1000000000 ? (d.mktcap / 1000000000).toFixed(1) + 'B' : (d.mktcap > 1000000 ? (d.mktcap / 1000000).toFixed(1) + 'M' : d.mktcap.toFixed(0))));
+    tooltip.html(`<TABLE class=tooltip><TR><TD COLSPAN=2>${d.rank}. <strong>${d.name}</strong> (${d.symbol})</TD></TR><TR><TD COLSPAN=2><FONT COLOR=#808080>${d.sector}</FONT></TD></TR><TR><TD>Expected annual growth</TD><TD>${d.change}%</TD></TR><TR><TD>10%-ile drop from 52wk high</TD><TD>${d.drop}%</TD></TR><TR><TD>Market cap</TD><TD>${mktcaptxt}</TD></TR><TR><TD>Prediction error</sup></TD><TD>${d.AllPredErr[0]}%</TD></TR><TR><TD colspan=2><div id=insetchart></div></TD></TR></TABLE>`)
+         .style('left', (event.pageX + 10) + 'px').style('top', (event.pageY - 20) + 'px').style('display', null).style('opacity', 1);
+    updateInsetChart(d);
+  }
+}
+function showTooltipOLD(event, d) {
+  const tooltip = d3.select('#tooltip');
+  if (d.opacity == 1) {
+    const mktcaptxt = (d.mktcap > 1000000000000 ? (d.mktcap / 1000000000000).toFixed(1) + 'T' : (d.mktcap > 1000000000 ? (d.mktcap / 1000000000).toFixed(1) + 'B' : (d.mktcap > 1000000 ? (d.mktcap / 1000000).toFixed(1) + 'M' : d.mktcap.toFixed(0))));
+    const quotedArray = [];
+    for (let i = 0; i < d.date.length; i++) {
+      quotedArray.push(`'${d.date[i]}'`);
+    }
+    const imgsrctxt = `https://quickchart.io/chart?w=120&h=100&c={type:'line',options:{legend:false,title:{display:false},scales:{yAxes:[{ticks:{fontSize:8,stepSize:20}}],xAxes:[{display:true,ticks:{fontSize:8,autoSkip:true}}]},plugins:{tickFormat:{suffix:'%'}}},data:{labels:[${quotedArray}],datasets:[
+{data:[${d.loss}],fill:false,borderColor:'%23c00000',borderDash:[1,1],borderWidth:1,pointRadius:0},
+{data:[${d.traj}],fill:false,borderColor:'blue',borderDash:[3,3],borderWidth:0.5,pointRadius:0},
+{data:[${d.price}],fill:false,borderColor:'blue',borderWidth:1,pointRadius:0}]}}`;
+    tooltip.html(`<TABLE class=tooltip><TR><TD COLSPAN=2>${d.rank}. <strong>${d.name}</strong></TD></TR><TR><TD COLSPAN=2><FONT COLOR=#808080>${d.sector}</FONT></TD></TR><TR><TD>Expected annual growth</TD><TD>${d.change}%</TD></TR><TR><TD>10%-ile drop from 52wk high</TD><TD>${d.drop}%</TD></TR><TR><TD>Market cap</TD><TD>${mktcaptxt}</TD></TR><TR><TD colspan=2><img src=\"${imgsrctxt}\"></TD></TR></TABLE>`).style('left', (event.pageX + 10) + 'px').style('top', (event.pageY - 20) + 'px').style('display', null).style('opacity', 1);
+  }
+}
+
+function updateInsetChart(data) {
+  const insetwidth = 300;
+  const insetheight = 200;
+  const insetmargx = 40
+  const insetmargy = 30
+
+  svg2 = d3.select('#insetchart').select('svg');
+  // If no SVG exists, create a new one
+  if (svg2.empty()) {
+     svg2 = d3.select('#insetchart').append('svg').attr('width', insetwidth).attr('height', insetheight);
+  }
+
+  //const yMin = Math.min(...data.loss, ...data.traj, ...data.price);
+  //const yMax = Math.max(...data.loss, ...data.traj, ...data.price);
+  const yExtent = [-100, 20]; // [yMin, yMax]; 
+  const yScale = d3.scaleLinear().domain(yExtent).range([insetheight - insetmargy*1.5, insetmargy*0.5]);
+
+  const xExtent = [Math.min(...data.datevalue), Math.max(...data.datevalue)];
+  const xScale = d3.scaleTime().domain(xExtent).range([insetmargx, insetwidth - insetmargx]);
+
+  svg2.selectAll('*').remove();
+  if (true) { // axes
+    svg2.append('g')
+	.attr('class', 'x-axis').attr('transform', `translate(0, ${insetheight - insetmargy*1.5} )`)
+	.call(d3.axisBottom(xScale).tickFormat(d3.timeFormat("%b'%y")))
+	.selectAll('text').style('text-anchor', 'end').attr('transform', 'rotate(-45)');
+    svg2.append('g').attr('class', 'y-axis').attr('transform', `translate(${insetmargx},0)`).call(d3.axisLeft(yScale).ticks(5));
+  }
+
+  const axisY = [0,0];
+  var line = d3.line().x((d, i) => xScale(xExtent[i])).y((d, i) => yScale(axisY[i]));
+  svg2.append('path').datum(d3.range(2)).attr('d', line).attr("fill", "none").attr("stroke", "black").attr("stroke-width", 1).attr("stroke-dasharray", "1,1");
+
+  line = d3.line().x((d, i) => xScale(data.datevalue[i])).y((d, i) => yScale(data.loss[i]));
+  svg2.append('path').datum(d3.range(data.datevalue.length)).attr('d', line).attr("fill", "none").attr("stroke", "#c00000").attr("stroke-width", 1).attr("stroke-dasharray", "1,1");
+
+  line = d3.line().x((d, i) => xScale(data.datevalue[i])).y((d, i) => yScale(data.traj[i]));
+  svg2.append('path').datum(d3.range(data.datevalue.length)).attr('d', line).attr("fill", "none").attr("stroke", "blue").attr("stroke-width", 1).attr("stroke-dasharray", "5,5");
+  
+  line = d3.line().x((d, i) => xScale(data.datevalue[i])).y((d, i) => yScale(data.price[i]));
+  svg2.append('path').datum(d3.range(data.datevalue.length)).attr('d', line).attr("fill", "none").attr("stroke", "blue").attr("stroke-width", 2);
+}
+function showHelpInfo(event) {
+  const tooltip = d3.select('#tooltip');
+  tooltip.html('This analysis identifies stocks with steady growth trends,using:' + '<LI>a conservative approach to identify consistent growth</LI>' + '<LI>a 10th percentile threadhold to assess potential loss from 52-wk highs due to poor timing</LI>').style('left', (event.pageX) + 'px').style('top', (event.pageY) + 'px').style('display', null).style('opacity', 1).on('mouseleave', hideTooltip);
+}
+
+function pickItem(event, d) {
+  showTooltip(event, d);
+  if (highlightItem == null) {
+    highlightItem = d.symbol;
+  } else if (highlightItem == d.symbol) {
+    highlightItem = null;
+  } else if (d.sector.startsWith(showCategory) || showCategory == 'Show all') {
+    highlightItem = d.symbol;
+  }
+  updateOpacity();
+  updateGraphics();
+}
+
+function clickChart(event, d) {
+  if (event.target.tagName == 'circle') {
+    pickItem(event, d);
+  } else {
+    highlightItem = null;
+    hideTooltip();
+    updateOpacity();
+    updateGraphics();
+  }
+}
+
+function debugmessage(testmessage) {
+  const tooltip = d3.select('#tooltip');
+  tooltip.html('MESSAGE: ' + testmessage).style('left', (10) + 'px').style('top', (20) + 'px').transition().duration(0).style('display', null).transition().duration(0).style('opacity', 1);
+}
+
+function hideTooltip() {
+  d3.select('#tooltip').style('opacity', 0).style('display', 'none');
+}
+updateGraphics();
+sortTable('datatable', 0, true);
+      
+</script>
+</body>
+</html>
+
+
